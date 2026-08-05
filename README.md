@@ -1,62 +1,65 @@
-# vi2meta — use VoiceInk with macrowhisper
+# vi2meta
 
-[macrowhisper](https://github.com/ognistik/macrowhisper) is an automation layer for
-[Superwhisper](https://superwhisper.com): it watches Superwhisper's recordings folder and, on
-each completed dictation, runs configured actions with contextual triggers, text templating and
-chaining. [VoiceInk](https://github.com/beingpax/VoiceInk) is a different macOS dictation app,
-and it writes no such folder, so the two cannot talk.
+![macOS](https://img.shields.io/badge/macOS-black?logo=apple&style=flat)
+![Python](https://img.shields.io/badge/Python_3-black?logo=python&style=flat)
+![Tests](https://img.shields.io/badge/tests-112_passing-black?style=flat)
+![License](https://img.shields.io/badge/License-MIT-black?style=flat)
 
-`vi2meta` bridges them. A VoiceInk *Custom Command* runs this adapter, which publishes a
-synthetic Superwhisper-shaped `recordings/<id>/meta.json`. **Stock, unmodified macrowhisper**
-picks it up and does the rest. Neither app is patched.
+Drive [macrowhisper](https://github.com/ognistik/macrowhisper) automations with
+[VoiceInk](https://github.com/beingpax/VoiceInk) dictations, without modifying either app.
+
+macrowhisper turns a dictation into an action: paste it, open a URL, run a Shortcut, a shell
+script, or AppleScript, with contextual triggers and text templating. It gets those dictations
+by watching Superwhisper's recordings folder. VoiceInk writes no such folder, so the two cannot
+talk. `vi2meta` is the missing piece.
 
 ```
 VoiceInk Mode (Output = Custom Command)
-   -> vi2meta.sh --mode <name>
-   -> ~/mw-bridge/recordings/<id>/meta.json     (atomic directory rename)
-   -> stock macrowhisper: validate -> match triggers -> run action
+  -> vi2meta.sh --mode <name>
+  -> ~/mw-bridge/recordings/<id>/meta.json      (atomic directory rename)
+  -> stock macrowhisper: validate -> match triggers -> run action
 ```
 
-**Status:** the macrowhisper side is proven end to end against a real macrowhisper 2.1.1
-install. 112 tests pass. The VoiceInk side is built to the behavior of VoiceInk's source at
-`v2.1` and has not yet been exercised against live VoiceInk — run the probe in step 5 before
-relying on it.
+## Features
 
-Requires macOS, Python 3 (system Python is fine, no dependencies), VoiceInk 2.0 or later for
-the Custom Command output mode, and macrowhisper.
+- Every macrowhisper action type works: paste, URL, Shortcut, shell, AppleScript
+- Voice, app, URL and mode triggers all fire normally
+- Zero changes to VoiceInk or macrowhisper; both run stock
+- Survives the three watcher behaviours that silently drop dictations (see [How it works](#how-it-works))
+- Never loses a transcript, even when publishing fails
+- Logs transcript length, not content, so the log is not a record of everything you say
+- No dependencies beyond system Python 3
 
----
+## Requirements
 
-## Quickstart
+| | |
+| --- | --- |
+| macOS | Tested on Darwin 25.6 |
+| [VoiceInk](https://github.com/beingpax/VoiceInk) | 2.0 or later, for the Custom Command output mode |
+| [macrowhisper](https://github.com/ognistik/macrowhisper) | 2.1.1 or later |
+| Python 3 | System Python is fine, no packages needed |
 
-**1. Install macrowhisper**
+## Setup
+
+**1. Install macrowhisper and create a watch directory**
 
 ```sh
 brew install ognistik/formulae/macrowhisper
-macrowhisper --version          # expect 2.1.1 or later
-```
-
-**2. Create a dedicated watch directory**
-
-```sh
 mkdir -p ~/mw-bridge/recordings
 ```
 
-Do **not** point this at `~/superwhisper`. If you also run Superwhisper, the bridge would
-interleave synthetic recordings with genuine ones.
+Do not point this at `~/superwhisper`. If you also run Superwhisper, the bridge would interleave
+synthetic recordings with real ones.
 
-**3. Configure macrowhisper**
+**2. Configure macrowhisper**
 
 ```sh
 cp prototype/macrowhisper.sample.json ~/.config/macrowhisper/macrowhisper.json
 macrowhisper --start-service
-macrowhisper --status           # confirm the recordings watcher is armed
+macrowhisper --status
 ```
 
-Read the `_comment` blocks in the sample before editing. `clipboardBuffer: 60.0` is deliberate,
-not a stray value; see Limitations.
-
-**4. Prove the macrowhisper half, without VoiceInk**
+**3. Verify the macrowhisper half, before involving VoiceInk**
 
 Set `defaults.activeAction` to `markerLog` in the config, then:
 
@@ -65,116 +68,92 @@ VOICEINK_TRANSCRIPT='hello world' ./prototype/vi2meta.sh --watch ~/mw-bridge
 sleep 2 && cat ~/mw-bridge/fired.log
 ```
 
-A line appears. That is the entire downstream path working. If it does not, fix it here before
-involving VoiceInk.
+A line appears. If it does not, fix that before going further.
 
-**5. Find out what VoiceInk actually sends**
+**4. Check what VoiceInk actually sends**
 
-- VoiceInk → new Mode `bridge-probe` → Output = **Custom Command**
-- Command: the absolute path to `prototype/probe.sh`
-- Dictate 3 or 4 times: short, long, punctuated, and once from a different app
-- Read `~/mw-bridge/probe.log`
+In VoiceInk, create a Mode with Output = **Custom Command** pointed at `prototype/probe.sh`,
+dictate a few times, then read `~/mw-bridge/probe.log`. Confirm one `INVOCATION` block per
+dictation and that nothing was pasted into the focused app.
 
-Confirm one `INVOCATION` block per dictation, `VOICEINK_TRANSCRIPT` matching stdin, and nothing
-pasted into the focused app.
+**5. Go live**
 
-**6. Go live**
+Point the Mode at `prototype/vi2meta.sh`, set `defaults.activeAction` back to `autoPaste`, grant
+macrowhisper Accessibility permission, focus a text field, and dictate. Say "google best pizza"
+to try the voice trigger from the sample config.
 
-Point the Mode's command at `prototype/vi2meta.sh`, set `defaults.activeAction` back to
-`autoPaste`, grant macrowhisper Accessibility permission (System Settings → Privacy & Security →
-Accessibility), focus a text field, and dictate. Then try saying "google best pizza" to exercise
-the voice trigger in the sample config.
-
-**Per-Mode setup.** VoiceInk does not tell the command which Mode fired: the entire environment
-it builds is `{"VOICEINK_TRANSCRIPT": transcript}`. So bake the name into each Mode's command
-line if you want macrowhisper's `triggerModes` to work:
+VoiceInk does not tell the command which Mode fired, so bake the name into each Mode's command
+if you want macrowhisper's `triggerModes` to work:
 
 ```
 /abs/path/to/prototype/vi2meta.sh --mode email
-/abs/path/to/prototype/vi2meta.sh --mode notes
 ```
 
----
+## Options
 
-## Why it is built this way
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--mode <name>` | none | Written as `modeName`, feeding macrowhisper's `triggerModes` |
+| `--watch <path>` | `$MW_BRIDGE_WATCH` or `~/mw-bridge` | macrowhisper's watch root |
+| `--gap <seconds>` | `1.0` | Minimum spacing between publishes |
+| `--drain-only` | off | Publish anything left in the spool and exit |
+| `--log-transcript` | off | Log transcript text instead of just its length |
 
-macrowhisper's watcher has four behaviors that a naive bridge trips over. Each one is a **silent**
+## How it works
+
+macrowhisper's watcher has four behaviours a naive bridge trips over. Each is a **silent**
 failure: nothing errors, the dictation just disappears. Line references are to
-`src/macrowhisper/Watcher/RecordingsFolderWatcher.swift` in macrowhisper 2.1.1.
+`Watcher/RecordingsFolderWatcher.swift` in macrowhisper 2.1.1.
 
-**Publish a complete folder, atomically.** There is a fast path when `meta.json` already exists
-as the folder appears (`:457-462`). Miss it and macrowhisper starts an audio watcher and a
-17-second timer, then logs `TIMEOUT CANCELLATION` for any folder still lacking a `.wav`
-(`:38`, `:1928-1935`). Bridge folders never have a `.wav`. So `vi2meta` builds the folder in a
-staging directory and renames the whole directory into place, where it can never be seen
-half-built.
+| Behaviour | Evidence | How `vi2meta` handles it |
+| --- | --- | --- |
+| A folder without `meta.json` inside it takes a slow path, then gets cancelled after 17s for having no `.wav` | `:38`, `:457-462`, `:1928-1935` | Builds the folder in a staging dir and renames the whole directory in, so it is never seen half-built |
+| Two folders appearing in one filesystem event means **none** of them run | `:327-345` | Serializes publishing behind an `flock` with a minimum gap |
+| A folder whose name sorts below the newest one is discarded as cloud-sync replay | `:350` | Mints the published name at publish time, always above the current maximum |
+| VoiceInk suppresses its own paste, then kills the command at 10s, so the transcript exists nowhere else | `TranscriptionDelivery.swift:43-46`, `:115` | Spools first, unconditionally, then publishes. Always exits 0 |
 
-**Never let two folders appear at once.** If more than one new directory shows up in a single
-filesystem event, macrowhisper marks them all processed and runs **none** (`:327-345`).
-Measured: three folders created in a tight loop produced one action and two losses. `vi2meta`
-serializes publication behind an `flock` with a minimum gap.
-
-**Never publish a name that sorts backwards.** A folder whose name sorts below the newest
-existing one is discarded as cloud-sync replay (`:350`). This was found by running the
-experiment, not by reading the code: five concurrent dictations put five folders on disk but
-fired only four actions. `vi2meta` mints the published name at publish time, always above the
-current maximum.
-
-**Never lose the transcript.** VoiceInk has already suppressed its own paste by the time the
-command runs (`TranscriptionDelivery.swift:43-46`), so the text exists nowhere else, and it
-kills the command at 10 seconds (`:115`). `vi2meta` spools first, which is fast and
-unconditional, and only then tries to publish. It always exits 0: a non-zero exit shows the user
-an error without recovering their words.
-
----
+Measured on a real macrowhisper 2.1.1 install: three folders created in a tight loop produced
+one action and two losses. Five concurrent dictations produced five folders but only four
+actions, until the naming fix. After it, five of five.
 
 ## Limitations
 
-**Clipboard context is degraded, and the amount is calculable.** macrowhisper captures
-pre-recording clipboard when the recording folder appears, looking back `clipboardBuffer`
-seconds. Under Superwhisper the folder appears when recording *starts*; here it appears when
-dictation *ends*. With the 5-second default, **any dictation longer than 5 seconds loses its
-pre-recording clipboard entirely.** The sample config sets 60.0.
+| Limitation | Detail |
+| --- | --- |
+| Clipboard context is degraded | macrowhisper looks back `clipboardBuffer` seconds from when the folder appears. Here that is *after* dictation, so with the 5s default, any dictation longer than 5s loses its pre-recording clipboard. The sample config sets 60 |
+| `{{selectedText}}` is post-dictation | Reflects what is selected after you finish speaking, not before. Raising `clipboardBuffer` does not fix this |
+| Only the final text | VoiceInk exposes no raw-versus-enhanced split, so `{{llmResult}}` is empty. Use `{{swResult}}` |
+| No `{{segments}}` | No speaker diarization is available |
+| Per-Mode, not global | Only Modes set to Custom Command feed the bridge |
 
-**`{{selectedText}}` reflects post-dictation state**, not what was selected before speaking.
-Raising `clipboardBuffer` does not fix this.
+Front-app placeholders and all trigger types are unaffected, since they resolve at action time.
+Every one of these is an artifact of bridging. A native Superwhisper-compatible `meta.json`
+export inside VoiceInk would fix them all at the source.
 
-**Only the final text exists.** VoiceInk exposes no raw-versus-enhanced split, so the transcript
-goes in `result` and `languageModelName`/`llmResult` are left absent. `{{llmResult}}` will be
-empty; use `{{swResult}}`.
+## Where things live
 
-**No `segments`.** No speaker diarization is available, so `{{segments}}` is empty.
-
-**Per-Mode, not global.** Only Modes set to Custom Command feed the bridge.
-
-Front-app placeholders and voice, app, URL and mode triggers are unaffected, since those resolve
-at action time.
-
-All of these are artifacts of bridging. A native Superwhisper-compatible `meta.json` export
-inside VoiceInk would fix every one at the source, and would make VoiceInk a drop-in for
-macrowhisper and every other Superwhisper-folder tool.
-
----
+| Path | Purpose |
+| :--- | :--- |
+| `prototype/vi2meta/transcript.py` | Resolve the transcript from env, with stdin fallback |
+| `prototype/vi2meta/meta.py` | Build and serialize the `meta.json` document (pure) |
+| `prototype/vi2meta/publisher.py` | Staging, spool, drain lock, atomic renames |
+| `prototype/vi2meta/cli.py` | Wiring, logging, exit-code policy |
+| `prototype/test_harness.py` | Port of macrowhisper's own validation gate, used as the test oracle |
+| `prototype/vi2meta.sh` | The one-liner you paste into VoiceInk |
+| `prototype/probe.sh` | Captures what VoiceInk actually sends |
+| `prototype/macrowhisper.sample.json` | Ready-to-use macrowhisper config |
 
 ## Development
 
 ```sh
-cd prototype && python3 -m unittest discover -s tests -t tests -v     # 112 tests
+cd prototype
+python3 -m unittest discover -s tests -t tests -v
 ```
 
 `test_harness.py` is a branch-for-branch port of macrowhisper's `isValidRecordingMetaJson`
-(`Utils/RecordingReferenceResolver.swift:34-53`). It is the test oracle: every generated
-document is asserted against it, which is what lets the adapter be verified without macrowhisper
-running. **If macrowhisper changes that gate, update the port** — `tests/test_harness_port.py`
-will show what drifted.
-
-| File | Role |
-|---|---|
-| `vi2meta/transcript.py` | resolve transcript from env, stdin fallback |
-| `vi2meta/meta.py` | pure meta.json construction |
-| `vi2meta/publisher.py` | staging, spool, drain lock, atomic renames |
-| `vi2meta/cli.py` | wiring, logging, exit-code policy |
-| `test_harness.py` | the ported validation oracle |
+(`Utils/RecordingReferenceResolver.swift:34-53`). Every generated document is asserted against
+it, which is what lets the adapter be verified without macrowhisper running. If macrowhisper
+changes that gate, update the port; `tests/test_harness_port.py` will show what drifted.
 
 Tests cover a 31-entry matrix of transcripts that break naive JSON emitters (quotes,
 backslashes, CRLF, NUL, control characters, astral-plane codepoints, combining accents, RTL,
@@ -182,14 +161,7 @@ backslashes, CRLF, NUL, control characters, astral-plane codepoints, combining a
 calls, a watcher thread asserting no directory is ever observed without its `meta.json`, and
 12-thread concurrency asserting zero transcript loss.
 
-**Logging.** `vi2meta` records transcript *length*, not content, so the log does not become a
-plaintext record of everything you dictate. `--log-transcript` opts in.
-
-**Tuning `--gap`.** The minimum seconds between publishes, defaulting to 1.0. It defends the
-burst-protection behavior above. It costs nothing for an isolated dictation, since the wait is
-zero when the previous publish was longer ago than the gap. Erring large is nearly free; erring
-small loses dictations silently. To lower it, bisect downward and treat macrowhisper's own log
-as the oracle:
+To lower `--gap`, bisect downward and use macrowhisper's own log as the oracle:
 
 ```sh
 grep -iE "burst protection|older than existing" ~/Library/Logs/Macrowhisper/macrowhisper.log
@@ -198,17 +170,27 @@ grep -iE "burst protection|older than existing" ~/Library/Logs/Macrowhisper/macr
 ## Troubleshooting
 
 | Symptom | Cause |
-|---|---|
-| Nothing happens at all | Is the service running? `macrowhisper --status`. Is `watch` the same directory you passed to `--watch`? |
-| Some dictations do nothing | Check `~/Library/Logs/Macrowhisper/macrowhisper.log` for `burst protection` or `older than existing`. Raise `--gap`. |
-| Text appears but no paste | macrowhisper needs Accessibility permission. Without it the log says `No accessibility permissions`. |
-| Quotes look backslashed in `fired.log` | Expected. macrowhisper shell-escapes `{{swResult}}` for shell actions. Insert actions are not escaped. |
-| Transcript missing entirely | Check `~/mw-bridge/vi2meta.log` and `~/mw-bridge/.spool/`. A deferred entry publishes on the next run, or force it with `--drain-only`. |
+| --- | --- |
+| Nothing happens | Is the service running? `macrowhisper --status`. Does `watch` match `--watch`? |
+| Some dictations do nothing | Check macrowhisper's log for `burst protection` or `older than existing`, then raise `--gap` |
+| Text appears but no paste | macrowhisper needs Accessibility permission |
+| Quotes look backslashed in `fired.log` | Expected. macrowhisper shell-escapes `{{swResult}}` for shell actions. Insert actions are not escaped |
+| Transcript missing entirely | Check `~/mw-bridge/vi2meta.log` and `~/mw-bridge/.spool/`, or force it with `--drain-only` |
 
-## Scope
+## Status
 
-Independent personal project. Not affiliated with VoiceInk, macrowhisper, or Superwhisper.
-Line references describe third-party source as audited at macrowhisper 2.1.1 and VoiceInk 2.1;
-verify against current releases before relying on them.
+The macrowhisper half is proven end to end against a real macrowhisper 2.1.1 install. The
+VoiceInk half is built to VoiceInk's source at `v2.1` and has not yet been run against live
+VoiceInk, which is what step 4 of Setup is for.
 
-MIT licensed.
+## Contributing
+
+Issues and pull requests are welcome. Please open a discussion first if you plan a larger
+change, so we can align on the approach.
+
+## License
+
+Released under the [MIT License](./LICENSE).
+
+Independent personal project, not affiliated with VoiceInk, macrowhisper, or Superwhisper.
+Line references describe third-party source as audited at macrowhisper 2.1.1 and VoiceInk 2.1.
