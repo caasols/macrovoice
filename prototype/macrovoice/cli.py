@@ -1,4 +1,4 @@
-"""vi2meta command line entry point.
+"""macrovoice command line entry point.
 
 Invoked by VoiceInk as the Custom Command for a Mode. VoiceInk runs
 `/bin/zsh -lc <command>` with VOICEINK_TRANSCRIPT in the environment and the same
@@ -25,7 +25,7 @@ from .publisher import DEFAULT_MIN_GAP_S, Publisher
 from .transcript import resolve_transcript
 
 DEFAULT_WATCH = "~/mw-bridge"
-LOG_NAME = "vi2meta.log"
+LOG_NAME = "macrovoice.log"
 
 
 def _log(watch_root: Path, message: str) -> None:
@@ -41,7 +41,7 @@ def _log(watch_root: Path, message: str) -> None:
 
 def _parse_args(argv):
     parser = argparse.ArgumentParser(
-        prog="vi2meta",
+        prog="macrovoice",
         description=(
             "Bridge a VoiceInk Custom Command invocation into a Superwhisper-shaped "
             "meta.json that stock macrowhisper watches."

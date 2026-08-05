@@ -1,6 +1,6 @@
 """Test oracle: a faithful Python port of macrowhisper's recording validation gate.
 
-This exists so `vi2meta`'s output can be proven correct WITHOUT macrowhisper installed
+This exists so `macrovoice`'s output can be proven correct WITHOUT macrowhisper installed
 and running. Every meta.json the adapter generates is asserted against this function.
 
 Ported verbatim (branch for branch) from:
@@ -51,7 +51,7 @@ def is_valid_recording_meta_json(json: Mapping[str, Any]) -> bool:
     2. JSON `null` (Swift `NSNull`) is rejected explicitly and is distinct from a
        missing key, though both ultimately return False here.
     3. The emptiness test is Swift's `isEmpty`, not a whitespace check. A result of
-       `" "` is VALID to macrowhisper. vi2meta independently declines to publish
+       `" "` is VALID to macrowhisper. macrovoice independently declines to publish
        whitespace-only transcripts, but that is the adapter's policy, not this gate's.
     """
     language_model_name = _as_string(json.get("languageModelName"))

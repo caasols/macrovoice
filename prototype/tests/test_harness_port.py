@@ -123,7 +123,7 @@ class TestLlmResultBranch(unittest.TestCase):
 
 
 class TestBridgeShapedDocuments(unittest.TestCase):
-    """The exact shape vi2meta emits must pass."""
+    """The exact shape macrovoice emits must pass."""
 
     def test_minimal_bridge_document(self):
         self.assertTrue(

@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from test_harness import is_valid_recording_meta_json  # noqa: E402
-from vi2meta.meta import build_meta, serialize_meta  # noqa: E402
+from macrovoice.meta import build_meta, serialize_meta  # noqa: E402
 
 # The content matrix from the design doc, section 7. Each entry is a transcript that
 # has historically broken naive JSON emitters.

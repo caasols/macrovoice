@@ -1,4 +1,4 @@
-"""Allow `python3 -m vi2meta`."""
+"""Allow `python3 -m macrovoice`."""
 
 from .cli import main
 

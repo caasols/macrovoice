@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from vi2meta.transcript import resolve_transcript  # noqa: E402
+from macrovoice.transcript import resolve_transcript  # noqa: E402
 
 
 class TestEnvPreferred(unittest.TestCase):

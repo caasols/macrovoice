@@ -1,7 +1,7 @@
 #!/bin/zsh
 # probe.sh - capture exactly what VoiceInk hands a Custom Command.
 #
-# Run this BEFORE trusting vi2meta. It answers, empirically, the questions a source
+# Run this BEFORE trusting macrovoice. It answers, empirically, the questions a source
 # audit can only answer theoretically:
 #
 #   - Is $VOICEINK_TRANSCRIPT the final (enhanced) text?
@@ -24,7 +24,7 @@
 #
 # WHAT TO LOOK FOR
 #   - One INVOCATION block per dictation. More than one means the firing semantics
-#     assumption is wrong and vi2meta needs idempotence.
+#     assumption is wrong and macrovoice needs idempotence.
 #   - ENV and STDIN sections carrying the same text.
 #   - Nothing pasted into the focused app while probing (paste suppression working).
 #   - Any VOICEINK_* variable beyond VOICEINK_TRANSCRIPT would be a genuine finding:
@@ -63,7 +63,7 @@ mkdir -p "$(dirname "$LOG")"
   if [[ "${VOICEINK_TRANSCRIPT-}" == "$stdin_text" ]]; then
     echo "  identical"
   else
-    echo "  DIFFERENT - worth investigating, vi2meta prefers the env var"
+    echo "  DIFFERENT - worth investigating, macrovoice prefers the env var"
   fi
   echo
   echo "--- full environment ---"

@@ -1,4 +1,4 @@
-# vi2meta
+# macrovoice
 
 ![macOS](https://img.shields.io/badge/macOS-black?logo=apple&style=flat)
 ![Python](https://img.shields.io/badge/Python_3-black?logo=python&style=flat)
@@ -11,11 +11,11 @@ Drive [macrowhisper](https://github.com/ognistik/macrowhisper) automations with
 macrowhisper turns a dictation into an action: paste it, open a URL, run a Shortcut, a shell
 script, or AppleScript, with contextual triggers and text templating. It gets those dictations
 by watching Superwhisper's recordings folder. VoiceInk writes no such folder, so the two cannot
-talk. `vi2meta` is the missing piece.
+talk. `macrovoice` is the missing piece.
 
 ```
 VoiceInk Mode (Output = Custom Command)
-  -> vi2meta.sh --mode <name>
+  -> macrovoice.sh --mode <name>
   -> ~/mw-bridge/recordings/<id>/meta.json      (atomic directory rename)
   -> stock macrowhisper: validate -> match triggers -> run action
 ```
@@ -64,7 +64,7 @@ macrowhisper --status
 Set `defaults.activeAction` to `markerLog` in the config, then:
 
 ```sh
-VOICEINK_TRANSCRIPT='hello world' ./prototype/vi2meta.sh --watch ~/mw-bridge
+VOICEINK_TRANSCRIPT='hello world' ./prototype/macrovoice.sh --watch ~/mw-bridge
 sleep 2 && cat ~/mw-bridge/fired.log
 ```
 
@@ -78,7 +78,7 @@ dictation and that nothing was pasted into the focused app.
 
 **5. Go live**
 
-Point the Mode at `prototype/vi2meta.sh`, set `defaults.activeAction` back to `autoPaste`, grant
+Point the Mode at `prototype/macrovoice.sh`, set `defaults.activeAction` back to `autoPaste`, grant
 macrowhisper Accessibility permission, focus a text field, and dictate. Say "google best pizza"
 to try the voice trigger from the sample config.
 
@@ -86,7 +86,7 @@ VoiceInk does not tell the command which Mode fired, so bake the name into each 
 if you want macrowhisper's `triggerModes` to work:
 
 ```
-/abs/path/to/prototype/vi2meta.sh --mode email
+/abs/path/to/prototype/macrovoice.sh --mode email
 ```
 
 ## Options
@@ -105,7 +105,7 @@ macrowhisper's watcher has four behaviours a naive bridge trips over. Each is a 
 failure: nothing errors, the dictation just disappears. Line references are to
 `Watcher/RecordingsFolderWatcher.swift` in macrowhisper 2.1.1.
 
-| Behaviour | Evidence | How `vi2meta` handles it |
+| Behaviour | Evidence | How `macrovoice` handles it |
 | --- | --- | --- |
 | A folder without `meta.json` inside it takes a slow path, then gets cancelled after 17s for having no `.wav` | `:38`, `:457-462`, `:1928-1935` | Builds the folder in a staging dir and renames the whole directory in, so it is never seen half-built |
 | Two folders appearing in one filesystem event means **none** of them run | `:327-345` | Serializes publishing behind an `flock` with a minimum gap |
@@ -134,12 +134,12 @@ export inside VoiceInk would fix them all at the source.
 
 | Path | Purpose |
 | :--- | :--- |
-| `prototype/vi2meta/transcript.py` | Resolve the transcript from env, with stdin fallback |
-| `prototype/vi2meta/meta.py` | Build and serialize the `meta.json` document (pure) |
-| `prototype/vi2meta/publisher.py` | Staging, spool, drain lock, atomic renames |
-| `prototype/vi2meta/cli.py` | Wiring, logging, exit-code policy |
+| `prototype/macrovoice/transcript.py` | Resolve the transcript from env, with stdin fallback |
+| `prototype/macrovoice/meta.py` | Build and serialize the `meta.json` document (pure) |
+| `prototype/macrovoice/publisher.py` | Staging, spool, drain lock, atomic renames |
+| `prototype/macrovoice/cli.py` | Wiring, logging, exit-code policy |
 | `prototype/test_harness.py` | Port of macrowhisper's own validation gate, used as the test oracle |
-| `prototype/vi2meta.sh` | The one-liner you paste into VoiceInk |
+| `prototype/macrovoice.sh` | The one-liner you paste into VoiceInk |
 | `prototype/probe.sh` | Captures what VoiceInk actually sends |
 | `prototype/macrowhisper.sample.json` | Ready-to-use macrowhisper config |
 
@@ -175,7 +175,7 @@ grep -iE "burst protection|older than existing" ~/Library/Logs/Macrowhisper/macr
 | Some dictations do nothing | Check macrowhisper's log for `burst protection` or `older than existing`, then raise `--gap` |
 | Text appears but no paste | macrowhisper needs Accessibility permission |
 | Quotes look backslashed in `fired.log` | Expected. macrowhisper shell-escapes `{{swResult}}` for shell actions. Insert actions are not escaped |
-| Transcript missing entirely | Check `~/mw-bridge/vi2meta.log` and `~/mw-bridge/.spool/`, or force it with `--drain-only` |
+| Transcript missing entirely | Check `~/mw-bridge/macrovoice.log` and `~/mw-bridge/.spool/`, or force it with `--drain-only` |
 
 ## Status
 

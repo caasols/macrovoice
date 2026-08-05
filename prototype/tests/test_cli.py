@@ -38,7 +38,7 @@ class CliTestCase(unittest.TestCase):
         if extra_env:
             env.update(extra_env)
         return subprocess.run(
-            [sys.executable, "-m", "vi2meta", "--watch", str(self.watch), "--gap", "0.01", *args],
+            [sys.executable, "-m", "macrovoice", "--watch", str(self.watch), "--gap", "0.01", *args],
             input=stdin_text,
             capture_output=True,
             text=True,
@@ -141,7 +141,7 @@ class TestExitCodePolicy(CliTestCase):
                 [
                     sys.executable,
                     "-m",
-                    "vi2meta",
+                    "macrovoice",
                     "--watch",
                     str(blocked / "mw-bridge"),
                     "--gap",
@@ -171,7 +171,7 @@ class TestExitCodePolicy(CliTestCase):
 class TestLogging(CliTestCase):
     def test_writes_a_log_line(self):
         self.run_cli(transcript="hello world")
-        log = (self.watch / "vi2meta.log").read_text(encoding="utf-8")
+        log = (self.watch / "macrovoice.log").read_text(encoding="utf-8")
         self.assertIn("published", log)
 
     def test_log_records_length_not_content_by_default(self):
@@ -179,13 +179,13 @@ class TestLogging(CliTestCase):
         # to metadata only; --log-transcript opts in.
         secret = "my bank password is hunter2"
         self.run_cli(transcript=secret)
-        log = (self.watch / "vi2meta.log").read_text(encoding="utf-8")
+        log = (self.watch / "macrovoice.log").read_text(encoding="utf-8")
         self.assertNotIn(secret, log)
         self.assertIn(str(len(secret)), log)
 
     def test_log_transcript_flag_opts_in(self):
         self.run_cli("--log-transcript", transcript="visible text")
-        log = (self.watch / "vi2meta.log").read_text(encoding="utf-8")
+        log = (self.watch / "macrovoice.log").read_text(encoding="utf-8")
         self.assertIn("visible text", log)
 
     def test_log_appends_across_invocations(self):
@@ -193,7 +193,7 @@ class TestLogging(CliTestCase):
         self.run_cli(transcript="second")
         lines = [
             line
-            for line in (self.watch / "vi2meta.log").read_text(encoding="utf-8").splitlines()
+            for line in (self.watch / "macrovoice.log").read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
         self.assertGreaterEqual(len(lines), 2)
@@ -209,7 +209,7 @@ class TestSequentialDictations(CliTestCase):
 
         # Flush anything still spooled by a deferred final call.
         subprocess.run(
-            [sys.executable, "-m", "vi2meta", "--watch", str(self.watch), "--gap", "0.01", "--drain-only"],
+            [sys.executable, "-m", "macrovoice", "--watch", str(self.watch), "--gap", "0.01", "--drain-only"],
             capture_output=True,
             text=True,
             cwd=str(PROTOTYPE),
@@ -224,7 +224,7 @@ class TestSequentialDictations(CliTestCase):
 
     def test_drain_only_publishes_nothing_new(self):
         result = subprocess.run(
-            [sys.executable, "-m", "vi2meta", "--watch", str(self.watch), "--drain-only"],
+            [sys.executable, "-m", "macrovoice", "--watch", str(self.watch), "--drain-only"],
             capture_output=True,
             text=True,
             cwd=str(PROTOTYPE),

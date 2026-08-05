@@ -224,7 +224,7 @@ class Publisher:
         """Last publish time, as a monotonic-comparable wall clock.
 
         Persisted on disk because the gap must hold across separate processes: each
-        VoiceInk dictation runs a brand-new vi2meta, so in-memory state is useless.
+        VoiceInk dictation runs a brand-new macrovoice, so in-memory state is useless.
         """
         try:
             return float(self._last_publish_path.read_text().strip())

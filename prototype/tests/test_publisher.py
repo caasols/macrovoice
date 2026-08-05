@@ -28,8 +28,8 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from test_harness import is_valid_recording_meta_json  # noqa: E402
-from vi2meta.meta import build_meta  # noqa: E402
-from vi2meta.publisher import Publisher, generate_recording_name  # noqa: E402
+from macrovoice.meta import build_meta  # noqa: E402
+from macrovoice.publisher import Publisher, generate_recording_name  # noqa: E402
 
 
 class TestRecordingNames(unittest.TestCase):
