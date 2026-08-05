@@ -1,0 +1,60 @@
+{
+  "_comment": [
+    "Sample macrowhisper config for the VoiceInk bridge. Copy to",
+    "~/.config/macrowhisper/macrowhisper.json and restart the service.",
+    "",
+    "watch: a DEDICATED directory, never ~/superwhisper. If you ever install",
+    "Superwhisper for real, the bridge writing into its recordings folder would",
+    "interleave synthetic and genuine recordings.",
+    "",
+    "clipboardBuffer is raised from its 5.0 default to 60.0 ON PURPOSE. macrowhisper",
+    "captures pre-recording clipboard context when the recording folder APPEARS",
+    "(RecordingsFolderWatcher.swift:441-443), looking back clipboardBuffer seconds",
+    "(ClipboardMonitor.swift:1139-1152). Under Superwhisper the folder appears when",
+    "recording STARTS; under the bridge it appears when dictation ENDS. So with the",
+    "5s default, any dictation longer than 5 seconds loses its pre-recording",
+    "clipboard entirely. 60s covers a normal dictation. This does not fix",
+    "{{selectedText}}, which still reflects post-dictation state.",
+    "",
+    "moveTo .delete keeps the watch directory from growing without bound. Set it to",
+    "'.none' while debugging so you can inspect the generated meta.json files."
+  ],
+
+  "defaults": {
+    "watch": "~/mw-bridge",
+    "activeAction": "autoPaste",
+    "moveTo": ".delete",
+    "clipboardBuffer": 60.0,
+    "actionDelay": 0.05,
+    "history": 0,
+    "muteNotifications": false
+  },
+
+  "inserts": {
+    "autoPaste": {
+      "action": ".autoPaste"
+    }
+  },
+
+  "urls": {
+    "google": {
+      "action": "https://www.google.com/search?q={{swResult}}",
+      "triggerVoice": "google",
+      "openBackground": false
+    }
+  },
+
+  "scriptsShell": {
+    "markerLog": {
+      "_comment": [
+        "Headless debugging action. Set defaults.activeAction to 'markerLog'",
+        "instead of 'autoPaste' to verify the bridge without needing a focused",
+        "text field or Accessibility permissions. This is how Gate 1 was proven.",
+        "Note that shell actions get shell-safe escaping applied to {{swResult}},",
+        "so quotes appear backslashed in the log. Insert actions are not escaped."
+      ],
+      "action": "printf '%s fired: %s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" '{{swResult}}' >> ~/mw-bridge/fired.log",
+      "scriptAsync": true
+    }
+  }
+}
