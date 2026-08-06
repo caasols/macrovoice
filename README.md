@@ -147,7 +147,7 @@ export inside VoiceInk would fix them all at the source.
 
 ```sh
 cd prototype
-python3 -m unittest discover -s tests -t tests -v      # 117 tests, 5 skipped
+python3 -m unittest discover -s tests -t tests -v      # 125 tests, 5 skipped
 ```
 
 Five of those are integration tests that drive a **real macrowhisper install**, so they are
@@ -176,6 +176,11 @@ backslashes, CRLF, NUL, control characters, astral-plane codepoints, combining a
 100k chars, JSON lookalikes, shell metacharacters), name monotonicity across 10,000 sequential
 calls, a watcher thread asserting no directory is ever observed without its `meta.json`, and
 12-thread concurrency asserting zero transcript loss.
+
+A separate set drives `/bin/zsh -lc <script>` exactly as VoiceInk does, covering the wrappers
+and the login shell rather than only the Python entry point: `--mode` reaching `modeName`,
+independence from the working directory, exit code 0 even when the watch root is unwritable,
+and completion well inside VoiceInk's 10-second kill deadline.
 
 The integration tests add what a unit test cannot reach: that stock macrowhisper actually acts
 on a published folder, that it still does so for five concurrent dictations (the case that
