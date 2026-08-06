@@ -1,0 +1,87 @@
+name: tests
+
+# Runs the macrovoice suite on every push and pull request.
+#
+# Why macOS and not the cheaper ubuntu runner: macrovoice only ever executes on a
+# Mac, invoked by VoiceInk. The suite exercises filesystem atomicity, flock and
+# Unicode handling, all of which are places where Linux would happily pass while
+# the only platform that matters behaves differently.
+#
+# Why 3.9 is in the matrix and is not negotiable: macrovoice.sh execs
+# `/usr/bin/env python3`, and on a stock Mac that is the system Python, 3.9.
+# A user who has never installed Homebrew Python runs the tool on 3.9, so if the
+# suite only passed on a modern interpreter the badge would be lying to exactly
+# the people most likely to hit a problem.
+#
+# The integration tests in tests/test_integration_macrowhisper.py skip
+# themselves here: they need a real macrowhisper install, and they are gated on
+# MACROVOICE_INTEGRATION=1 which is deliberately not set. The "verify" step
+# below asserts they skipped rather than silently vanished.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.12', '3.13']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run the suite
+        working-directory: prototype
+        run: python -m unittest discover -s tests -t tests -v
+
+      - name: Verify the integration tests skipped rather than disappeared
+        working-directory: prototype
+        run: |
+          # A gate that silently stops collecting tests looks identical to a
+          # gate that correctly skips them. Assert the count explicitly.
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.discover('tests', top_level_dir='tests')
+          names = []
+          def walk(s):
+              for t in s:
+                  walk(t) if isinstance(t, unittest.TestSuite) else names.append(t.id())
+          walk(suite)
+          integration = [n for n in names if 'test_integration_macrowhisper' in n]
+          print(f"collected {len(names)} tests, {len(integration)} integration")
+          assert integration, "integration tests vanished from collection"
+          PY
+
+      - name: Smoke-test the packaged entry point
+        working-directory: prototype
+        run: |
+          # The unit tests import the package. This proves the thing VoiceInk
+          # actually invokes works: env var in, meta.json on disk.
+          set -euo pipefail
+          WATCH="$(mktemp -d)/mw-bridge"
+          VOICEINK_TRANSCRIPT='ci smoke café 🎙' \
+            python -m macrovoice --watch "$WATCH" --gap 0.01 < /dev/null
+          python - "$WATCH" <<'PY'
+          import json, pathlib, sys
+          watch = pathlib.Path(sys.argv[1])
+          metas = list((watch / "recordings").rglob("meta.json"))
+          assert len(metas) == 1, f"expected one meta.json, found {metas}"
+          data = json.loads(metas[0].read_text(encoding="utf-8"))
+          assert data["result"] == 'ci smoke café 🎙', data
+          # languageModelName must stay absent, or macrowhisper flips its
+          # validation gate to require llmResult, which the bridge cannot supply.
+          assert "languageModelName" not in data, data
+          print("smoke ok:", metas[0].parent.name)
+          PY

@@ -2,7 +2,7 @@
 
 ![macOS](https://img.shields.io/badge/macOS-black?logo=apple&style=flat)
 ![Python](https://img.shields.io/badge/Python_3-black?logo=python&style=flat)
-![Tests](https://img.shields.io/badge/tests-112_passing-black?style=flat)
+[![Tests](https://github.com/caasols/macrovoice/actions/workflows/tests.yml/badge.svg)](https://github.com/caasols/macrovoice/actions/workflows/tests.yml)
 ![License](https://img.shields.io/badge/License-MIT-black?style=flat)
 
 Drive [macrowhisper](https://github.com/ognistik/macrowhisper) automations with
@@ -147,8 +147,24 @@ export inside VoiceInk would fix them all at the source.
 
 ```sh
 cd prototype
-python3 -m unittest discover -s tests -t tests -v
+python3 -m unittest discover -s tests -t tests -v      # 117 tests, 5 skipped
 ```
+
+Five of those are integration tests that drive a **real macrowhisper install**, so they are
+opt-in and skip themselves unless you ask for them:
+
+```sh
+MACROVOICE_INTEGRATION=1 python3 -m unittest discover -s tests -t tests
+```
+
+They launch a real daemon, so they confine themselves to a temporary watch directory and a
+temporary config: `~/mw-bridge` and `~/.config/macrowhisper/` are never touched. They use a
+shell action rather than a paste, so no Accessibility permission is needed and nothing is
+typed into whatever app you have focused. Note that `macrowhisper --config` *persists* the
+path it is given, so the original is captured at import and restored afterwards.
+
+CI runs the suite on macOS across Python 3.9, 3.12 and 3.13. 3.9 is deliberate: `macrovoice.sh`
+execs `/usr/bin/env python3`, and on a stock Mac that is the system Python.
 
 `test_harness.py` is a branch-for-branch port of macrowhisper's `isValidRecordingMetaJson`
 (`Utils/RecordingReferenceResolver.swift:34-53`). Every generated document is asserted against
@@ -160,6 +176,13 @@ backslashes, CRLF, NUL, control characters, astral-plane codepoints, combining a
 100k chars, JSON lookalikes, shell metacharacters), name monotonicity across 10,000 sequential
 calls, a watcher thread asserting no directory is ever observed without its `meta.json`, and
 12-thread concurrency asserting zero transcript loss.
+
+The integration tests add what a unit test cannot reach: that stock macrowhisper actually acts
+on a published folder, that it still does so for five concurrent dictations (the case that
+exposed the out-of-order naming bug), and that text survives the full round trip. One measured
+quirk is pinned there: macrowhisper hands accented text back in NFD while the bridge writes
+NFC, so `café` returns as `e` + U+0301. Same text, different bytes, unequal under a naive
+comparison.
 
 To lower `--gap`, bisect downward and use macrowhisper's own log as the oracle:
 
