@@ -54,7 +54,7 @@ synthetic recordings with real ones.
 **2. Configure macrowhisper**
 
 ```sh
-cp prototype/macrowhisper.sample.json ~/.config/macrowhisper/macrowhisper.json
+cp macrowhisper.sample.json ~/.config/macrowhisper/macrowhisper.json
 macrowhisper --start-service
 macrowhisper --status
 ```
@@ -64,7 +64,7 @@ macrowhisper --status
 Set `defaults.activeAction` to `markerLog` in the config, then:
 
 ```sh
-VOICEINK_TRANSCRIPT='hello world' ./prototype/macrovoice.sh --watch ~/mw-bridge
+VOICEINK_TRANSCRIPT='hello world' ./macrovoice.sh --watch ~/mw-bridge
 sleep 2 && cat ~/mw-bridge/fired.log
 ```
 
@@ -72,7 +72,7 @@ A line appears. If it does not, fix that before going further.
 
 **4. Check what VoiceInk actually sends**
 
-In VoiceInk, create a Mode with Output = **Custom Command** pointed at `prototype/probe.sh`,
+In VoiceInk, create a Mode with Output = **Custom Command** pointed at `probe.sh`,
 **toggle "Set as default" on** (see the warning below), dictate a few times, then read
 `~/mw-bridge/probe.log`. Confirm one `INVOCATION` block per dictation and that nothing was
 pasted into the focused app.
@@ -98,7 +98,7 @@ pasted into the focused app.
 
 **5. Go live**
 
-Point the Mode at `prototype/macrovoice.sh`, set `defaults.activeAction` back to `autoPaste`, grant
+Point the Mode at `macrovoice.sh`, set `defaults.activeAction` back to `autoPaste`, grant
 macrowhisper Accessibility permission, focus a text field, and dictate. Say "google best pizza"
 to try the voice trigger from the sample config.
 
@@ -111,7 +111,7 @@ VoiceInk does not tell the command which Mode fired, so bake the name into each 
 if you want macrowhisper's `triggerModes` to work:
 
 ```
-/abs/path/to/prototype/macrovoice.sh --mode email
+/abs/path/to/macrovoice.sh --mode email
 ```
 
 ## Options
@@ -176,20 +176,19 @@ export inside VoiceInk would fix them all at the source.
 
 | Path | Purpose |
 | :--- | :--- |
-| `prototype/macrovoice/transcript.py` | Resolve the transcript from env, with stdin fallback |
-| `prototype/macrovoice/meta.py` | Build and serialize the `meta.json` document (pure) |
-| `prototype/macrovoice/publisher.py` | Staging, spool, drain lock, atomic renames |
-| `prototype/macrovoice/cli.py` | Wiring, logging, exit-code policy |
-| `prototype/test_harness.py` | Port of macrowhisper's own validation gate, used as the test oracle |
-| `prototype/macrovoice.sh` | The one-liner you paste into VoiceInk |
-| `prototype/probe.sh` | Captures what VoiceInk actually sends |
-| `prototype/macrowhisper.sample.json` | Ready-to-use macrowhisper config |
+| `macrovoice/transcript.py` | Resolve the transcript from env, with stdin fallback |
+| `macrovoice/meta.py` | Build and serialize the `meta.json` document (pure) |
+| `macrovoice/publisher.py` | Staging, spool, drain lock, atomic renames |
+| `macrovoice/cli.py` | Wiring, logging, exit-code policy |
+| `test_harness.py` | Port of macrowhisper's own validation gate, used as the test oracle |
+| `macrovoice.sh` | The one-liner you paste into VoiceInk |
+| `probe.sh` | Captures what VoiceInk actually sends |
+| `macrowhisper.sample.json` | Ready-to-use macrowhisper config |
 
 ## Development
 
 ```sh
-cd prototype
-python3 -m unittest discover -s tests -t tests -v      # 125 tests, 5 skipped
+python3 -m unittest discover -s tests -t tests -v      # 161 tests, 5 skipped
 ```
 
 Five of those are integration tests that drive a **real macrowhisper install**, so they are
