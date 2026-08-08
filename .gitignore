@@ -5,6 +5,8 @@
 .LSOverride
 Icon?
 
+node_modules/
+
 # Editors
 .vscode/
 .idea/
@@ -41,6 +43,7 @@ docs/
 evidence/
 upstream/
 graphify-out/
+.graphifyignore
 
 # Markdown is private by default.
 #
