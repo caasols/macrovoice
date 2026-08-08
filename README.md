@@ -73,14 +73,39 @@ A line appears. If it does not, fix that before going further.
 **4. Check what VoiceInk actually sends**
 
 In VoiceInk, create a Mode with Output = **Custom Command** pointed at `prototype/probe.sh`,
-dictate a few times, then read `~/mw-bridge/probe.log`. Confirm one `INVOCATION` block per
-dictation and that nothing was pasted into the focused app.
+**toggle "Set as default" on** (see the warning below), dictate a few times, then read
+`~/mw-bridge/probe.log`. Confirm one `INVOCATION` block per dictation and that nothing was
+pasted into the focused app.
+
+> **A Custom Command Mode does nothing unless it is default or explicitly triggered.**
+> VoiceInk picks the active Mode as `configurations.first { $0.isEnabled && $0.isDefault }`
+> (`ModeConfig.swift:416`). If your new Mode is saved but not default and has no shortcut,
+> every dictation quietly goes through your normal Mode instead: **the text pastes as usual and
+> your command never runs.** That looks exactly like "VoiceInk does not suppress the paste, so
+> this cannot work," and it is not. Verify with:
+>
+> ```sh
+> python3 -c "
+> import subprocess, plistlib, json, io
+> p = subprocess.run(['defaults','export','com.prakashjoshipax.VoiceInk','-'], capture_output=True)
+> for c in json.loads(plistlib.load(io.BytesIO(p.stdout))['modeConfigurationsV2']):
+>     print(f\"{c['name']:16} outputMode={c['outputMode']:14} isDefault={c['isDefault']}\")
+> "
+> ```
+>
+> While a Custom Command Mode is default, normal dictation stops pasting anywhere. That is
+> expected. Switch your everyday Mode back when you are done.
 
 **5. Go live**
 
 Point the Mode at `prototype/macrovoice.sh`, set `defaults.activeAction` back to `autoPaste`, grant
 macrowhisper Accessibility permission, focus a text field, and dictate. Say "google best pizza"
 to try the voice trigger from the sample config.
+
+Voice triggers are **prefix-anchored**: macrowhisper builds `"^(?i)" + escaped pattern`
+(`Utils/TriggerEvaluator.swift:205`), so the trigger word must be the **first** word of the
+dictation. "Google best pizza" matches; "Can you Google the best pizza" does not, and falls
+through to your default action instead.
 
 VoiceInk does not tell the command which Mode fired, so bake the name into each Mode's command
 if you want macrowhisper's `triggerModes` to work:
@@ -115,6 +140,23 @@ failure: nothing errors, the dictation just disappears. Line references are to
 Measured on a real macrowhisper 2.1.1 install: three folders created in a tight loop produced
 one action and two losses. Five concurrent dictations produced five folders but only four
 actions, until the naming fix. After it, five of five.
+
+## Set `simEsc: false`, or macrowhisper will discard your work
+
+The sample config sets this for you. If you write your own, **do not skip it.**
+
+macrowhisper defaults `simEsc` to **true** and, before pasting, posts a literal Escape keypress
+to the system-wide HID event tap (`Utils/Accessibility.swift:477-494`, `simulateKeyDown` key 53).
+Under Superwhisper that ESC dismisses Superwhisper's own recording window. **Under this bridge
+there is no such window, so the Escape lands in whatever app you are typing into.**
+
+Measured 2026-08-08: dictating into a ProtonMail compose window **closed the draft**, and the
+paste then had nowhere to land. Any app where ESC means cancel, close, or discard is exposed,
+and you lose work with no error.
+
+What makes it easy to misdiagnose is that the damage is app-specific. The same dictation pastes
+perfectly into a browser address bar or a terminal, where Escape is harmless, so it reads as a
+paste bug in one app rather than a global setting doing collateral damage.
 
 ## Limitations
 

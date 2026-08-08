@@ -94,11 +94,30 @@ class TestSchemaShape(unittest.TestCase):
         when = datetime(2026, 8, 5, 2, 14, 33)
         self.assertEqual(build_meta("hi", when=when)["datetime"], "2026-08-05T02:14:33Z")
 
-    def test_duration_defaults_to_zero(self):
-        self.assertEqual(build_meta("hi")["duration"], 0.0)
+    def test_duration_is_omitted_when_unknown(self):
+        """Absent, not zero. Measured against macrowhisper 2.1.1 on 2026-08-06.
 
-    def test_duration_passthrough(self):
-        self.assertEqual(build_meta("hi", duration=12.5)["duration"], 12.5)
+        macrowhisper treats `duration` as MILLISECONDS and formats it through
+        formatTimeValue (Placeholders.swift:789, :968). Writing 0.0 makes
+        {{duration}} render as "0ms", which reads as a real measurement of a
+        very fast dictation. Omitting the key renders it as empty instead,
+        which is honestly unresolved.
+
+        This is not a stylistic choice. VoiceInk gives a Custom Command only
+        {"VOICEINK_TRANSCRIPT": transcript} (CustomCommandDeliveryContext), so
+        the bridge has no duration to report and never will. Emitting a
+        plausible number it did not measure is the one option that can mislead.
+        """
+        self.assertNotIn("duration", build_meta("hi"))
+
+    def test_duration_passthrough_when_a_real_value_exists(self):
+        # Kept so a future source of truth (a native VoiceInk export, Path 2)
+        # can populate it without reworking the builder. Milliseconds.
+        self.assertEqual(build_meta("hi", duration_ms=12.5)["duration"], 12.5)
+
+    def test_explicit_zero_is_still_written(self):
+        # A caller that genuinely measured zero is different from not knowing.
+        self.assertEqual(build_meta("hi", duration_ms=0.0)["duration"], 0.0)
 
     def test_no_group_b_fields_written(self):
         """macrowhisper injects these itself at runtime; the bridge must not write them.
@@ -125,7 +144,7 @@ class TestSchemaShape(unittest.TestCase):
     def test_exact_key_set(self):
         self.assertEqual(
             set(build_meta("hi", mode_name="bridge").keys()),
-            {"result", "modeName", "datetime", "duration"},
+            {"result", "modeName", "datetime"},
         )
 
 

@@ -14,7 +14,7 @@ GROUP A, which the source app must provide, and which this module writes:
                        RecordingReferenceResolver.swift:34-53
     modeName           optional. Feeds triggerModes. TriggerEvaluator.swift:22
     datetime           optional. Placeholder use.
-    duration           optional. Placeholder use.
+    duration           optional, in MILLISECONDS. DELIBERATELY OMITTED, see below.
     segments           optional. Feeds {{segments}}. VoiceInk exposes none, so omitted.
     llmResult          optional. DELIBERATELY OMITTED, see below.
     languageModelName  optional. DELIBERATELY OMITTED, see below.
@@ -30,6 +30,13 @@ Custom Command exposes only the FINAL text, with no way to tell whether it was
 AI-enhanced, so there is no honest way to populate both fields. Putting the final
 text in `result` and leaving the LLM fields absent makes the gate validate on
 `result`, which is exactly what we can guarantee.
+
+Why duration stays absent: VoiceInk hands a Custom Command only
+{"VOICEINK_TRANSCRIPT": transcript}, so there is no duration to report, and there
+never will be through this path. macrowhisper reads the field as milliseconds and
+formats it, so a placeholder 0.0 renders as "0ms": a number that looks measured.
+Omitting the key renders {{duration}} as empty instead. Both were verified against
+macrowhisper 2.1.1 on 2026-08-06. A missing value should look missing.
 """
 
 import json
@@ -55,13 +62,24 @@ def build_meta(
     transcript: str,
     mode_name: Optional[str] = None,
     when: Optional[datetime] = None,
-    duration: float = 0.0,
+    duration_ms: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Return a fresh meta.json document for one dictation.
 
     `mode_name` is omitted from the document entirely when None or empty, rather
     than written as null. TriggerEvaluator.swift:22 reads it with `as? String`,
     which a null would fail anyway, so a null key would be pure noise.
+
+    `duration_ms` follows the same rule, for a sharper reason. It is in
+    MILLISECONDS, which is how macrowhisper interprets the field before formatting
+    it (Placeholders.swift:789, :968). The bridge never has a value to put there:
+    VoiceInk hands a Custom Command only {"VOICEINK_TRANSCRIPT": transcript}
+    (CustomCommandDeliveryContext), with no duration in it. Measured against
+    macrowhisper 2.1.1 on 2026-08-06, writing 0.0 makes {{duration}} render as
+    "0ms", indistinguishable from a genuinely instant dictation, while omitting
+    the key renders it as empty. A missing value should look missing, so the
+    parameter stays available for a future native export (Path 2) but defaults
+    to absent.
 
     The transcript is stored verbatim. No trimming, no normalization, no cleanup:
     macrowhisper owns text transformation via its own templating and smart-insertion
@@ -70,10 +88,11 @@ def build_meta(
     meta: Dict[str, Any] = {
         "result": transcript,
         "datetime": _format_datetime(when if when is not None else datetime.now(timezone.utc)),
-        "duration": duration,
     }
     if mode_name:
         meta["modeName"] = mode_name
+    if duration_ms is not None:
+        meta["duration"] = duration_ms
     return meta
 
 

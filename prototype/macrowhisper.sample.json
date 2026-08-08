@@ -17,7 +17,17 @@
     "{{selectedText}}, which still reflects post-dictation state.",
     "",
     "moveTo .delete keeps the watch directory from growing without bound. Set it to",
-    "'.none' while debugging so you can inspect the generated meta.json files."
+    "'.none' while debugging so you can inspect the generated meta.json files.",
+    "",
+    "simEsc is forced to false ON PURPOSE, and this one destroys user data if you get",
+    "it wrong. macrowhisper defaults it to TRUE and, before pasting, posts a literal",
+    "Escape keypress to the system-wide HID event tap",
+    "(Accessibility.swift:477-494, simulateKeyDown key 53). Under Superwhisper that ESC",
+    "dismisses Superwhisper's own recording window. Under this bridge there is no such",
+    "window, so the ESC goes straight into whatever app you are typing in. Measured",
+    "2026-08-08: dictating into a ProtonMail compose window CLOSED THE DRAFT, and the",
+    "paste then had nowhere to land. Any app where ESC means cancel, close, or discard",
+    "is exposed. Leave this false."
   ],
 
   "defaults": {
@@ -27,7 +37,8 @@
     "clipboardBuffer": 60.0,
     "actionDelay": 0.05,
     "history": 0,
-    "muteNotifications": false
+    "muteNotifications": false,
+    "simEsc": false
   },
 
   "inserts": {
