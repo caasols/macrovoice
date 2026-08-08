@@ -1,6 +1,16 @@
 # macOS
 .DS_Store
 ._*
+.AppleDouble
+.LSOverride
+Icon?
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
 # Python
 __pycache__/
@@ -9,6 +19,8 @@ __pycache__/
 .venv/
 venv/
 .coverage
+htmlcov/
+*.egg-info/
 
 # Bridge runtime state. The real watch root lives at ~/mw-bridge, outside the repo.
 /mw-bridge/
@@ -17,3 +29,40 @@ venv/
 .drain.lock
 .last-publish
 *.log
+/watch/
+/scratch/
+**/tmp/
+
+# Local working material. This repo is developed alongside a research workspace
+# and a generated code graph, both of which sit in the same folder and are not
+# part of the published tool. They are kept out of git rather than out of the
+# directory, so the working tree stays usable while the repo stays just the tool.
+docs/
+evidence/
+upstream/
+graphify-out/
+
+# Markdown is private by default.
+#
+# Notes, working docs and captured output live in this folder next to the code.
+# Listing each one by name meant a new note was tracked until someone remembered
+# to add it, which is the wrong way round for files that are not meant to ship.
+# This fails closed instead: a new .md is ignored unless it is named below.
+*.md
+
+# The un-ignored set: conventional public-facing repo docs. Declared up front,
+# even though most do not exist yet, so that creating one later does not silently
+# produce an untracked file. Root-anchored, so a note that happens to share one of
+# these names deeper in the tree stays ignored.
+!/README.md
+!/CONTRIBUTING.md
+!/CODE_OF_CONDUCT.md
+!/SECURITY.md
+!/CHANGELOG.md
+!/LICENSE.md
+# LICENSE with no extension is not matched by *.md and needs no rule.
+
+# GitHub's own markdown surfaces: issue and PR templates, funding notes. Safe as a
+# glob because .github/ is not itself excluded; a negation cannot resurrect a file
+# inside an excluded directory, which is why the directory rules above are absolute.
+!/.github/**/*.md
