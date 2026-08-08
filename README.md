@@ -20,13 +20,17 @@ VoiceInk Mode (Output = Custom Command)
   -> stock macrowhisper: validate -> match triggers -> run action
 ```
 
+Proven end to end against live VoiceInk 2.1 and macrowhisper 2.1.1: dictate, and macrowhisper
+pastes with smart casing and spacing, voice triggers fire, `triggerModes` matches. Neither app
+is patched and neither knows the other exists.
+
 ## Features
 
 - Every macrowhisper action type works: paste, URL, Shortcut, shell, AppleScript
 - Voice, app, URL and mode triggers all fire normally
 - Zero changes to VoiceInk or macrowhisper; both run stock
-- Survives the three watcher behaviours that silently drop dictations (see [How it works](#how-it-works))
-- Never loses a transcript, even when publishing fails
+- Survives the four watcher behaviours that silently drop dictations (see [How it works](#how-it-works))
+- Never loses a transcript, even when publishing fails or the process is killed at the deadline
 - Logs transcript length, not content, so the log is not a record of everything you say
 - No dependencies beyond system Python 3
 
@@ -56,14 +60,27 @@ synthetic recordings with real ones.
 ```sh
 cp macrowhisper.sample.json ~/.config/macrowhisper/macrowhisper.json
 macrowhisper --start-service
-macrowhisper --status
+sleep 8 && macrowhisper --status
 ```
+
+The `sleep` matters. Folders that already exist when the recordings watcher arms are marked
+processed and dropped, so publishing during the startup window looks like nothing happening.
+
+Switch actions with the CLI, not by editing the config while the daemon runs:
+
+```sh
+macrowhisper --action markerLog     # switch
+macrowhisper --get-action           # verify it took
+```
+
+A file edit landing just after macrowhisper's own internal write is swallowed
+(`Suppressed config reload after internal write`), and `autoUpdateConfig` then rewrites the file
+from memory, erasing your change.
 
 **3. Verify the macrowhisper half, before involving VoiceInk**
 
-Set `defaults.activeAction` to `markerLog` in the config, then:
-
 ```sh
+macrowhisper --action markerLog
 VOICEINK_TRANSCRIPT='hello world' ./macrovoice.sh --watch ~/mw-bridge
 sleep 2 && cat ~/mw-bridge/fired.log
 ```
@@ -72,47 +89,79 @@ A line appears. If it does not, fix that before going further.
 
 **4. Check what VoiceInk actually sends**
 
-In VoiceInk, create a Mode with Output = **Custom Command** pointed at `probe.sh`,
-**toggle "Set as default" on** (see the warning below), dictate a few times, then read
-`~/mw-bridge/probe.log`. Confirm one `INVOCATION` block per dictation and that nothing was
-pasted into the focused app.
-
-> **A Custom Command Mode does nothing unless it is default or explicitly triggered.**
-> VoiceInk picks the active Mode as `configurations.first { $0.isEnabled && $0.isDefault }`
-> (`ModeConfig.swift:416`). If your new Mode is saved but not default and has no shortcut,
-> every dictation quietly goes through your normal Mode instead: **the text pastes as usual and
-> your command never runs.** That looks exactly like "VoiceInk does not suppress the paste, so
-> this cannot work," and it is not. Verify with:
->
-> ```sh
-> python3 -c "
-> import subprocess, plistlib, json, io
-> p = subprocess.run(['defaults','export','com.prakashjoshipax.VoiceInk','-'], capture_output=True)
-> for c in json.loads(plistlib.load(io.BytesIO(p.stdout))['modeConfigurationsV2']):
->     print(f\"{c['name']:16} outputMode={c['outputMode']:14} isDefault={c['isDefault']}\")
-> "
-> ```
->
-> While a Custom Command Mode is default, normal dictation stops pasting anywhere. That is
-> expected. Switch your everyday Mode back when you are done.
+In VoiceInk, create a Mode with Output = **Custom Command** pointed at `probe.sh`, give it a
+keyboard shortcut or set it as default (see [Picking the Mode](#picking-the-mode-the-trap-everyone-hits)),
+dictate a few times, then read `~/mw-bridge/probe.log`. Confirm one `INVOCATION` block per
+dictation and that nothing was pasted into the focused app.
 
 **5. Go live**
 
-Point the Mode at `macrovoice.sh`, set `defaults.activeAction` back to `autoPaste`, grant
+Point the Mode at `macrovoice.sh`, switch back with `macrowhisper --action autoPaste`, grant
 macrowhisper Accessibility permission, focus a text field, and dictate. Say "google best pizza"
 to try the voice trigger from the sample config.
 
 Voice triggers are **prefix-anchored**: macrowhisper builds `"^(?i)" + escaped pattern`
-(`Utils/TriggerEvaluator.swift:205`), so the trigger word must be the **first** word of the
-dictation. "Google best pizza" matches; "Can you Google the best pizza" does not, and falls
-through to your default action instead.
+(`Utils/TriggerEvaluator.swift:205`), so the trigger word must be the **first** word. "Google
+best pizza" matches; "Can you Google the best pizza" does not, and silently falls through to
+your default action.
 
 VoiceInk does not tell the command which Mode fired, so bake the name into each Mode's command
-if you want macrowhisper's `triggerModes` to work:
+if you want `triggerModes` to work:
 
 ```
 /abs/path/to/macrovoice.sh --mode email
 ```
+
+## Picking the Mode, the trap everyone hits
+
+A Custom Command Mode is **inert unless it is the default or has its own keyboard shortcut.**
+VoiceInk resolves the Mode per dictation in `ActiveWindowService.beginApplyingConfiguration`
+(`Modes/ActiveWindowService.swift:19-46`):
+
+1. A **Mode-specific shortcut** passes that Mode's id and wins outright.
+2. The **generic hotkey** passes no id and resolves
+   `getConfigurationForApp(bundleId) ?? getDefaultConfiguration()`: an app rule if one matches,
+   otherwise the Mode marked **Set as default**.
+3. With no default at all, it falls back to list order (`Modes/ModeConfig.swift:420-428`).
+
+So a Mode that is saved but neither default nor shortcut-bound never runs. Every dictation goes
+through your normal Mode, the text pastes as usual, and your command is never called. That looks
+exactly like "VoiceInk does not suppress the paste, so this cannot work," and it is not.
+
+Verify what is actually stored:
+
+```sh
+python3 -c "
+import subprocess, plistlib, json, io
+p = subprocess.run(['defaults','export','com.prakashjoshipax.VoiceInk','-'], capture_output=True)
+for c in json.loads(plistlib.load(io.BytesIO(p.stdout))['modeConfigurationsV2']):
+    print(f\"{c['name']:16} outputMode={c['outputMode']:14} isDefault={c['isDefault']}\")
+"
+```
+
+Do not diagnose from `activeConfigurationId`. It looks like a sticky override and is not: it is
+rewritten at the start of every dictation, so it only records what the last one used.
+
+**The recommended layout:** leave your everyday Mode as default, and give the bridge Mode its own
+shortcut. Normal dictation then pastes as usual and never depends on macrowhisper being alive;
+the shortcut routes through the bridge on demand.
+
+## Set `simEsc: false`, or macrowhisper will discard your work
+
+The sample config sets this for you. If you write your own, do not skip it.
+
+macrowhisper defaults `simEsc` to **true** and, before pasting, posts a literal Escape keypress
+to the system-wide HID event tap (`Utils/Accessibility.swift:477-494`, `simulateKeyDown` key 53).
+Under Superwhisper that ESC dismisses Superwhisper's own recording window. Under this bridge
+there is no such window, so the Escape lands in whatever app you are typing into.
+
+Measured: dictating into a ProtonMail compose window **closed the draft**, and the paste then had
+nowhere to land. Any app where ESC means cancel, close, or discard is exposed, and you lose work
+with no error.
+
+What makes it easy to misdiagnose is that the damage is app-specific. The same dictation pastes
+perfectly into a browser address bar or a terminal, where Escape is harmless, so it reads as a
+paste bug in one app rather than a global setting doing collateral damage.
 
 ## Options
 
@@ -132,45 +181,93 @@ failure: nothing errors, the dictation just disappears. Line references are to
 
 | Behaviour | Evidence | How `macrovoice` handles it |
 | --- | --- | --- |
-| A folder without `meta.json` inside it takes a slow path, then gets cancelled after 17s for having no `.wav` | `:38`, `:457-462`, `:1928-1935` | Builds the folder in a staging dir and renames the whole directory in, so it is never seen half-built |
+| A folder without `meta.json` inside it takes a slow path, then is cancelled after 17s for having no `.wav` | `:38`, `:457-462`, `:1928-1935` | Builds the folder in a staging dir and renames the whole directory in, so it is never seen half-built |
 | Two folders appearing in one filesystem event means **none** of them run | `:327-345` | Serializes publishing behind an `flock` with a minimum gap |
 | A folder whose name sorts below the newest one is discarded as cloud-sync replay | `:350` | Mints the published name at publish time, always above the current maximum |
-| VoiceInk suppresses its own paste, then kills the command at 10s, so the transcript exists nowhere else | `TranscriptionDelivery.swift:43-46`, `:115` | Spools first, unconditionally, then publishes. Always exits 0 |
+| Folders that already exist when the watcher arms are marked processed at startup | startup path | Cannot be defended from this side. Wait a few seconds after starting the daemon |
 
-Measured on a real macrowhisper 2.1.1 install: three folders created in a tight loop produced
-one action and two losses. Five concurrent dictations produced five folders but only four
-actions, until the naming fix. After it, five of five.
+Plus one from VoiceInk: it suppresses its own paste and then kills the command at 10 seconds
+(`TranscriptionDelivery.swift:43-46`, `:115`), so the transcript exists nowhere else.
+`macrovoice` spools first, unconditionally, and only then publishes. It always exits 0, because
+a non-zero exit shows the user an error without recovering their words.
 
-## Set `simEsc: false`, or macrowhisper will discard your work
+Measured on a real install: three folders created in a tight loop produced one action and two
+losses. Five concurrent dictations produced five folders but only four actions, until the naming
+fix; after it, five of five. At human speaking cadence, five dictations in ten seconds all
+delivered, and a 633-character dictation arrived intact.
 
-The sample config sets this for you. If you write your own, **do not skip it.**
+## Tests
 
-macrowhisper defaults `simEsc` to **true** and, before pasting, posts a literal Escape keypress
-to the system-wide HID event tap (`Utils/Accessibility.swift:477-494`, `simulateKeyDown` key 53).
-Under Superwhisper that ESC dismisses Superwhisper's own recording window. **Under this bridge
-there is no such window, so the Escape lands in whatever app you are typing into.**
+161 tests, **99% branch coverage with zero missing statements**. CI runs the suite on macOS
+across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice.sh` execs
+`/usr/bin/env python3`, and on a stock Mac that is the system Python.
 
-Measured 2026-08-08: dictating into a ProtonMail compose window **closed the draft**, and the
-paste then had nowhere to land. Any app where ESC means cancel, close, or discard is exposed,
-and you lose work with no error.
+| File | Tests | Covers |
+| --- | --- | --- |
+| `tests/test_publisher.py` | 44 | Staging, spool, drain lock, burst spacing, atomic renames, name monotonicity, cross-process collisions |
+| `tests/test_harness_port.py` | 24 | That the oracle still matches macrowhisper's validation gate, branch for branch |
+| `tests/test_meta.py` | 23 | A 31-entry escaping matrix and the `meta.json` schema contract |
+| `tests/test_cli.py` | 21 | The CLI driven through real subprocesses, including the exit-code policy |
+| `tests/test_integration_safety.py` | 20 | The integration suite's own guard against hijacking your macrowhisper |
+| `tests/test_transcript.py` | 16 | Env and stdin resolution, and the empty-input policy |
+| `tests/test_voiceink_invocation.py` | 8 | The `.sh` wrappers through `/bin/zsh -lc`, exactly as VoiceInk calls them |
+| `tests/test_integration_macrowhisper.py` | 5 | Opt-in; drives a **real macrowhisper daemon** |
 
-What makes it easy to misdiagnose is that the damage is app-specific. The same dictation pastes
-perfectly into a browser address bar or a terminal, where Escape is harmless, so it reads as a
-paste bug in one app rather than a global setting doing collateral damage.
+```sh
+python3 -m unittest discover -s tests -t tests -v      # 161 tests, 5 skipped
+MACROVOICE_INTEGRATION=1 python3 -m unittest discover -s tests -t tests
+```
+
+`test_harness.py` is a branch-for-branch port of macrowhisper's `isValidRecordingMetaJson`
+(`Utils/RecordingReferenceResolver.swift:34-53`). Every generated document is asserted against
+it, which is what lets the adapter be verified without macrowhisper running. If macrowhisper
+changes that gate, update the port; `tests/test_harness_port.py` will show what drifted.
+
+The escaping matrix covers transcripts that break naive JSON emitters: quotes, backslashes,
+CRLF, NUL, control characters, astral-plane codepoints, combining accents, RTL, 100k characters,
+JSON lookalikes and shell metacharacters. Other tests assert name monotonicity across 10,000
+sequential calls, that a watcher thread never observes a directory without its `meta.json`, and
+zero transcript loss under 12-thread concurrency.
+
+Two regression tests exist because the failure they guard is a **hang**, so they carry hard
+timeouts: a future-dated folder, or one whose name starts with a letter, used to make the
+publisher spin forever waiting for the clock to overtake it.
+
+The integration tests are opt-in because they launch a real daemon. They confine themselves to a
+temporary watch directory and a temporary config, so `~/mw-bridge` and `~/.config/macrowhisper/`
+are never touched, and they use a shell action rather than a paste, so no Accessibility
+permission is needed and nothing is typed into whatever app you have focused. `macrowhisper
+--config` *persists* the path it is given, so the original is captured at import, restored
+afterwards, and asserted not to be a temp directory.
 
 ## Limitations
 
-| Limitation | Detail |
-| --- | --- |
-| Clipboard context is degraded | macrowhisper looks back `clipboardBuffer` seconds from when the folder appears. Here that is *after* dictation, so with the 5s default, any dictation longer than 5s loses its pre-recording clipboard. The sample config sets 60 |
-| `{{selectedText}}` is post-dictation | Reflects what is selected after you finish speaking, not before. Raising `clipboardBuffer` does not fix this |
-| Only the final text | VoiceInk exposes no raw-versus-enhanced split, so `{{llmResult}}` is empty. Use `{{swResult}}` |
-| No `{{segments}}` | No speaker diarization is available |
-| Per-Mode, not global | Only Modes set to Custom Command feed the bridge |
+**Clipboard context is degraded, and the amount is calculable.** macrowhisper captures
+pre-recording clipboard when the folder appears, looking back `clipboardBuffer` seconds. Under
+Superwhisper the folder appears when recording *starts*; here it appears when dictation *ends*.
+With the 5-second default, any dictation longer than 5 seconds loses its pre-recording clipboard
+entirely. The sample config sets 60.
 
-Front-app placeholders and all trigger types are unaffected, since they resolve at action time.
-Every one of these is an artifact of bridging. A native Superwhisper-compatible `meta.json`
-export inside VoiceInk would fix them all at the source.
+**`{{selectedText}}` reflects post-dictation state**, not what you had selected when you began
+speaking.
+
+**Only the final text exists.** VoiceInk exposes no raw-versus-enhanced split, so `result`
+carries the final text and `languageModelName`/`llmResult` are left absent. `{{llmResult}}` will
+be empty; use `{{swResult}}`.
+
+**No `segments`**, so `{{segments}}` is empty. **No `duration`**: VoiceInk does not expose one,
+and macrowhisper reads that field as milliseconds, so a placeholder `0.0` would render as `"0ms"`
+and look measured. The key is omitted, and `{{duration}}` renders empty instead.
+
+**Accented text is NFD.** VoiceInk emits combining marks, so `café` arrives as `e` + U+0301, not
+U+00E9. `macrovoice` is byte-faithful and never normalises, and `.autoPaste` passes it through
+unchanged. This only matters if you write actions that grep or compare dictated text: a `café`
+typed into a config is NFC and will never match. Normalise both sides.
+
+**Per-Mode, not global.** Only Modes set to Custom Command feed the bridge.
+
+**Front-app placeholders and voice, app, URL and mode triggers are unaffected**, since those
+resolve at action time.
 
 ## Where things live
 
@@ -185,72 +282,36 @@ export inside VoiceInk would fix them all at the source.
 | `probe.sh` | Captures what VoiceInk actually sends |
 | `macrowhisper.sample.json` | Ready-to-use macrowhisper config |
 
-## Development
+## Troubleshooting
 
-```sh
-python3 -m unittest discover -s tests -t tests -v      # 161 tests, 5 skipped
-```
+| Symptom | Cause |
+| --- | --- |
+| Nothing happens at all | Is your Mode default or shortcut-bound? See [Picking the Mode](#picking-the-mode-the-trap-everyone-hits) |
+| Text pastes normally, your command never runs | The same thing. The Mode is inert |
+| The bridge publishes but nothing fires | Does macrowhisper's **saved** config match? `macrowhisper --get-config`, then check its `watch` |
+| Some dictations do nothing | Check macrowhisper's log for `burst protection` or `older than existing`, then raise `--gap` |
+| Text appears but no paste | macrowhisper needs Accessibility permission, and the daemon must be restarted after you grant it |
+| A dictation closed my draft | `simEsc`. See the section above |
+| Config edits appear to do nothing | Use `macrowhisper --action`, not a file edit while the daemon runs |
+| Quotes look backslashed in `fired.log` | Expected. macrowhisper shell-escapes `{{swResult}}` for shell actions. Insert actions are not escaped |
+| Transcript missing entirely | Check `~/mw-bridge/macrovoice.log` and `~/mw-bridge/.spool/`, or force it with `--drain-only` |
 
-Five of those are integration tests that drive a **real macrowhisper install**, so they are
-opt-in and skip themselves unless you ask for them:
-
-```sh
-MACROVOICE_INTEGRATION=1 python3 -m unittest discover -s tests -t tests
-```
-
-They launch a real daemon, so they confine themselves to a temporary watch directory and a
-temporary config: `~/mw-bridge` and `~/.config/macrowhisper/` are never touched. They use a
-shell action rather than a paste, so no Accessibility permission is needed and nothing is
-typed into whatever app you have focused. Note that `macrowhisper --config` *persists* the
-path it is given, so the original is captured at import and restored afterwards.
-
-CI runs the suite on macOS across Python 3.9, 3.12 and 3.13. 3.9 is deliberate: `macrovoice.sh`
-execs `/usr/bin/env python3`, and on a stock Mac that is the system Python.
-
-`test_harness.py` is a branch-for-branch port of macrowhisper's `isValidRecordingMetaJson`
-(`Utils/RecordingReferenceResolver.swift:34-53`). Every generated document is asserted against
-it, which is what lets the adapter be verified without macrowhisper running. If macrowhisper
-changes that gate, update the port; `tests/test_harness_port.py` will show what drifted.
-
-Tests cover a 31-entry matrix of transcripts that break naive JSON emitters (quotes,
-backslashes, CRLF, NUL, control characters, astral-plane codepoints, combining accents, RTL,
-100k chars, JSON lookalikes, shell metacharacters), name monotonicity across 10,000 sequential
-calls, a watcher thread asserting no directory is ever observed without its `meta.json`, and
-12-thread concurrency asserting zero transcript loss.
-
-A separate set drives `/bin/zsh -lc <script>` exactly as VoiceInk does, covering the wrappers
-and the login shell rather than only the Python entry point: `--mode` reaching `modeName`,
-independence from the working directory, exit code 0 even when the watch root is unwritable,
-and completion well inside VoiceInk's 10-second kill deadline.
-
-The integration tests add what a unit test cannot reach: that stock macrowhisper actually acts
-on a published folder, that it still does so for five concurrent dictations (the case that
-exposed the out-of-order naming bug), and that text survives the full round trip. One measured
-quirk is pinned there: macrowhisper hands accented text back in NFD while the bridge writes
-NFC, so `café` returns as `e` + U+0301. Same text, different bytes, unequal under a naive
-comparison.
-
-To lower `--gap`, bisect downward and use macrowhisper's own log as the oracle:
+`macrowhisper --status` exits 0 even when nothing is running, so do not use it as a liveness
+check in a script. To lower `--gap`, bisect downward and use macrowhisper's own log as the
+oracle:
 
 ```sh
 grep -iE "burst protection|older than existing" ~/Library/Logs/Macrowhisper/macrowhisper.log
 ```
 
-## Troubleshooting
-
-| Symptom | Cause |
-| --- | --- |
-| Nothing happens | Is the service running? `macrowhisper --status`. Does `watch` match `--watch`? |
-| Some dictations do nothing | Check macrowhisper's log for `burst protection` or `older than existing`, then raise `--gap` |
-| Text appears but no paste | macrowhisper needs Accessibility permission |
-| Quotes look backslashed in `fired.log` | Expected. macrowhisper shell-escapes `{{swResult}}` for shell actions. Insert actions are not escaped |
-| Transcript missing entirely | Check `~/mw-bridge/macrovoice.log` and `~/mw-bridge/.spool/`, or force it with `--drain-only` |
-
 ## Status
 
-The macrowhisper half is proven end to end against a real macrowhisper 2.1.1 install. The
-VoiceInk half is built to VoiceInk's source at `v2.1` and has not yet been run against live
-VoiceInk, which is what step 4 of Setup is for.
+Proven end to end against live VoiceInk 2.1 and macrowhisper 2.1.1. A dictation goes from
+VoiceInk through `macrovoice` to a synthetic `meta.json` and out through stock macrowhisper,
+which pastes it with smart casing and spacing; `--mode` reaches `triggerModes`, and voice
+triggers fire. Verified at real human speaking cadence: five dictations in ten seconds all
+delivered, a 633-character dictation intact, quotes and shell metacharacters clean, and accented
+text measured end to end.
 
 ## Contributing
 
