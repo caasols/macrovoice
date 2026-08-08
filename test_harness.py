@@ -10,7 +10,7 @@ The identical logic is duplicated upstream at:
     upstream/macrowhisper/src/macrowhisper/Watcher/RecordingsFolderWatcher.swift:478-518
 
 If macrowhisper changes that gate, this port MUST be updated in lockstep, and
-prototype/tests/test_harness_port.py is what will catch the drift.
+tests/test_harness_port.py is what will catch the drift.
 """
 
 from typing import Any, Mapping

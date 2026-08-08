@@ -12,8 +12,8 @@
 #   (CustomCommandDeliveryRunner.swift:12-16). So if you want macrowhisper's
 #   triggerModes to work, give each Mode its own command line with the name baked in:
 #
-#     /path/to/prototype/macrovoice.sh --mode email
-#     /path/to/prototype/macrovoice.sh --mode notes
+#     /path/to/macrovoice.sh --mode email
+#     /path/to/macrovoice.sh --mode notes
 #
 #   Without --mode, meta.json simply omits modeName and triggerModes will not match.
 

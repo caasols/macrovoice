@@ -30,9 +30,9 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-PROTOTYPE = Path(__file__).resolve().parent.parent
-MACROVOICE_SH = PROTOTYPE / "macrovoice.sh"
-PROBE_SH = PROTOTYPE / "probe.sh"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+MACROVOICE_SH = REPO_ROOT / "macrovoice.sh"
+PROBE_SH = REPO_ROOT / "probe.sh"
 
 # VoiceInk's hard limit. Not configurable, and the transcript exists nowhere else
 # by the time the command runs, so overrunning it loses the dictation outright.

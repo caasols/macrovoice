@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from test_harness import is_valid_recording_meta_json  # noqa: E402
 
-PROTOTYPE = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class CliTestCase(unittest.TestCase):
@@ -42,7 +42,7 @@ class CliTestCase(unittest.TestCase):
             input=stdin_text,
             capture_output=True,
             text=True,
-            cwd=str(PROTOTYPE),
+            cwd=str(REPO_ROOT),
             env=env,
             timeout=timeout,
         )
@@ -150,7 +150,7 @@ class TestExitCodePolicy(CliTestCase):
                 input="",
                 capture_output=True,
                 text=True,
-                cwd=str(PROTOTYPE),
+                cwd=str(REPO_ROOT),
                 env={**os.environ, "VOICEINK_TRANSCRIPT": "hello"},
                 timeout=30,
             )
@@ -212,7 +212,7 @@ class TestSequentialDictations(CliTestCase):
             [sys.executable, "-m", "macrovoice", "--watch", str(self.watch), "--gap", "0.01", "--drain-only"],
             capture_output=True,
             text=True,
-            cwd=str(PROTOTYPE),
+            cwd=str(REPO_ROOT),
             timeout=30,
         )
 
@@ -254,7 +254,7 @@ class TestSequentialDictations(CliTestCase):
             [sys.executable, "-m", "macrovoice", "--watch", str(self.watch), "--drain-only"],
             capture_output=True,
             text=True,
-            cwd=str(PROTOTYPE),
+            cwd=str(REPO_ROOT),
             timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr)

@@ -37,7 +37,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-PROTOTYPE = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from macrovoice.publisher import DEFAULT_MIN_GAP_S as DEFAULT_GAP_S  # noqa: E402
 
@@ -352,7 +352,7 @@ class RealMacrowhisperTestCase(unittest.TestCase):
             input="",
             capture_output=True,
             text=True,
-            cwd=str(PROTOTYPE),
+            cwd=str(REPO_ROOT),
             env=env,
             timeout=60,
         )
@@ -491,7 +491,7 @@ class ConcurrentPublishRegressionTest(RealMacrowhisperTestCase):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
-                    cwd=str(PROTOTYPE),
+                    cwd=str(REPO_ROOT),
                     env=env,
                 )
             )

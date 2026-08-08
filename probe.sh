@@ -15,7 +15,7 @@
 # actually have installed, which may differ from the audited snapshot.
 #
 # SETUP
-#   1. chmod +x prototype/probe.sh
+#   1. chmod +x probe.sh
 #   2. In VoiceInk: create a Mode named "bridge-probe", set Output = Custom Command,
 #      and set the command to the absolute path of this script.
 #   3. Dictate 3 or 4 times: something short, something long, something with
