@@ -123,7 +123,3 @@ def main(argv=None) -> int:
         # non-zero exit would not recover it anyway.
         _log(watch_root, f"ERROR (exiting 0 anyway): {traceback.format_exc().strip()}")
         return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

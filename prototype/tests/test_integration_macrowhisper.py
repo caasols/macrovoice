@@ -28,6 +28,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import unicodedata
 import unittest
@@ -67,6 +68,75 @@ def _is_default_config(text):
     return "default config path" in text
 
 
+def _temp_roots():
+    """Every directory prefix that means 'this is scratch space, not a real config'.
+
+    macOS resolves /tmp to /private/tmp and /var to /private/var, and TMPDIR is
+    per-user under /var/folders, so each root is recorded in both spellings.
+    """
+    roots = set()
+    for root in (tempfile.gettempdir(), "/tmp", "/var/folders"):
+        if not root:
+            continue
+        normalised = os.path.normpath(root)
+        roots.add(normalised)
+        roots.add(os.path.normpath("/private" + normalised))
+        # ...and the reverse, for a TMPDIR already expressed under /private.
+        if normalised.startswith("/private/"):
+            roots.add(normalised[len("/private") :])
+    return roots
+
+
+def looks_like_leaked_temp_path(path):
+    """True if `path` sits inside a temp directory, i.e. a leak from a prior run.
+
+    This exists because the obvious guard does not work. Teardown used to ask
+    "did the config path change during this run", which cannot catch a leak that
+    happened in an EARLIER run: the next run reads the leaked temp path, records
+    it as the value to protect, restores it faithfully, and passes. The guard
+    compares the leaked value with itself. That is precisely how the 2026-08-06
+    leak survived two days while every dictation silently vanished.
+
+    So the question has to be "is this path sane", not "did it change".
+
+    Conservative on purpose. A false positive resets a path the user chose
+    deliberately, which is a silent change to their setup, so matching is by path
+    COMPONENT and never by substring: `~/tmpconfig/macrowhisper.json` is a
+    perfectly ordinary place to keep a config and must not be touched.
+    """
+    if not path:
+        return False
+    candidate = str(path).strip()
+    # Only absolute paths can be judged. Relative paths and CLI prose such as
+    # "using default config path" are handled by the caller, not here.
+    if not candidate.startswith("/"):
+        return False
+    resolved = os.path.normpath(candidate)
+    for root in _temp_roots():
+        if resolved == root or resolved.startswith(root.rstrip("/") + os.sep):
+            return True
+    return False
+
+
+def resolve_original_config(raw):
+    """Decide what to treat as the user's config, from `--get-config` output.
+
+    Returns `(path, was_default, leaked)`. `leaked` is the rejected temp path, or
+    None. Pure, so the decision that protects the user's install is testable
+    without a macrowhisper anywhere near it.
+
+    A path inside a temp directory is never adopted as "the original". Adopting
+    it is what made the 2026-08-06 leak self-perpetuating and invisible. Falling
+    back to the default config path is always safe: it is where macrowhisper
+    would have looked with no configuration at all.
+    """
+    path = raw.split(":", 1)[1].strip() if ":" in raw else ""
+    was_default = _is_default_config(raw)
+    if looks_like_leaked_temp_path(path):
+        return "", True, path
+    return path, was_default, None
+
+
 # Captured ONCE, at import, before any test can touch it. Restoring from a
 # per-test snapshot is not good enough: if a test leaks, every later test
 # snapshots the leaked value and faithfully restores the wrong thing.
@@ -74,12 +144,19 @@ if MACROWHISPER and ENABLED:
     _ORIGINAL_RAW = subprocess.run(
         [MACROWHISPER, "--get-config"], capture_output=True, text=True, timeout=15
     ).stdout.strip()
-    _ORIGINAL_PATH = (
-        _ORIGINAL_RAW.split(":", 1)[1].strip() if ":" in _ORIGINAL_RAW else ""
-    )
-    _ORIGINAL_WAS_DEFAULT = _is_default_config(_ORIGINAL_RAW)
+    _ORIGINAL_PATH, _ORIGINAL_WAS_DEFAULT, _LEAKED = resolve_original_config(_ORIGINAL_RAW)
+    if _LEAKED:
+        print(
+            "\nWARNING: macrowhisper's saved config path is a temp directory:\n"
+            f"  {_LEAKED}\n"
+            "A previous integration run leaked it. Your daemon has been reading a\n"
+            "throwaway config, so its watch directory is probably wrong and\n"
+            "dictations may have been silently discarded. Resetting to the default\n"
+            "instead of preserving the leak.\n",
+            file=sys.stderr,
+        )
 else:
-    _ORIGINAL_RAW, _ORIGINAL_PATH, _ORIGINAL_WAS_DEFAULT = "", "", True
+    _ORIGINAL_RAW, _ORIGINAL_PATH, _ORIGINAL_WAS_DEFAULT, _LEAKED = "", "", True, None
 
 
 def _restore_original_config():
@@ -111,6 +188,19 @@ def tearDownModule():
         return
     _restore_original_config()
     now = _get_config_path()
+
+    # The check that actually catches a leak. "Did the path change" cannot: a
+    # leak inherited from an earlier run is equal to itself and passes silently.
+    # "Is the path sane" holds regardless of what we captured at import.
+    if looks_like_leaked_temp_path(now):
+        raise RuntimeError(
+            "INTEGRATION TESTS LEFT YOUR MACROWHISPER POINTED AT A TEMP CONFIG.\n"
+            f"  saved path: {now}\n"
+            "That directory is scratch space and will be deleted. Your daemon\n"
+            "would silently watch nothing and discard every dictation.\n"
+            "Fix with: macrowhisper --reset-config"
+        )
+
     if _ORIGINAL_PATH and now != _ORIGINAL_PATH:
         raise RuntimeError(
             "INTEGRATION TESTS LEAKED YOUR MACROWHISPER CONFIG PATH.\n"
@@ -191,6 +281,12 @@ class RealMacrowhisperTestCase(unittest.TestCase):
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=10)
+            finally:
+                # Popen does not close the pipes it opened. Leaving them dangling
+                # emits ResourceWarnings and leaks a descriptor per daemon, which
+                # a longer run would eventually feel.
+                if proc.stdout:
+                    proc.stdout.close()
 
         self.addCleanup(stop)
         self.daemon = proc
@@ -401,6 +497,11 @@ class ConcurrentPublishRegressionTest(RealMacrowhisperTestCase):
             )
         for p in procs:
             p.wait(timeout=90)
+            # Close the pipes Popen opened, or each publisher leaks two
+            # descriptors and the run emits ResourceWarnings.
+            for stream in (p.stdout, p.stderr):
+                if stream:
+                    stream.close()
 
         # Anything the gap deferred is still spooled; drain it before asserting.
         # The gap MUST match what the publishers used. Draining with a smaller
@@ -413,12 +514,24 @@ class ConcurrentPublishRegressionTest(RealMacrowhisperTestCase):
         self.run_macrovoice("", "--drain-only", gap=str(DEFAULT_GAP_S))
 
         lines = self.wait_for_fires(5)
+
+        # Distinguish the two very different failures this test can see:
+        #   - published but not acted on  -> a macrowhisper silent drop
+        #   - never published             -> macrovoice ran out of drain budget
+        # The original message showed only the recordings dir, which cannot tell
+        # them apart and sent one debugging round down the wrong path.
+        spooled = sorted(p.name for p in (self.watch / ".spool").iterdir())
+        published = sorted(p.name for p in (self.watch / "recordings").iterdir())
+        adapter_log = (self.watch / "macrovoice.log")
+        adapter = adapter_log.read_text(encoding="utf-8") if adapter_log.exists() else "(none)"
+
         self.assertEqual(
             sorted(lines),
             sorted(f"dictation {i}" for i in range(5)),
             "silent drop regression: macrowhisper did not act on every published "
-            f"folder.\npublished on disk: "
-            f"{sorted(p.name for p in (self.watch / 'recordings').iterdir())}\n"
+            f"folder.\npublished on disk ({len(published)}): {published}\n"
+            f"STILL SPOOLED ({len(spooled)}): {spooled}\n"
+            f"macrovoice.log:\n{adapter}\n"
             f"daemon:\n{self._daemon_output()}",
         )
 

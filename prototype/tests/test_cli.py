@@ -222,6 +222,33 @@ class TestSequentialDictations(CliTestCase):
         }
         self.assertEqual(found, expected)
 
+    def test_a_deferred_publish_says_so_in_the_log(self):
+        """When another process holds the drain lock, we spool and say we spooled.
+
+        The log is the only forensic trail a user has when a dictation does not
+        appear: the real macrovoice.log from 2026-08-05 is how the concurrency
+        bug was diagnosed at all. A deferred publish that logged "published"
+        would actively mislead, pointing the investigation at macrowhisper when
+        the folder had never left the spool.
+        """
+        import fcntl
+
+        lock_path = self.watch / ".drain.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        holder = open(lock_path, "w")
+        self.addCleanup(holder.close)
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        self.run_cli(transcript="held up by the lock")
+
+        log = (self.watch / "macrovoice.log").read_text(encoding="utf-8")
+        self.assertIn("spooled (deferred", log)
+        self.assertIn("drained=0", log)
+        self.assertNotIn("published 17", log)
+        # The transcript is safe in the spool, not lost and not published.
+        self.assertEqual(self.published(), [])
+        self.assertEqual(len(list((self.watch / ".spool").iterdir())), 1)
+
     def test_drain_only_publishes_nothing_new(self):
         result = subprocess.run(
             [sys.executable, "-m", "macrovoice", "--watch", str(self.watch), "--drain-only"],

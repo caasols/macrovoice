@@ -35,8 +35,8 @@ Why duration stays absent: VoiceInk hands a Custom Command only
 {"VOICEINK_TRANSCRIPT": transcript}, so there is no duration to report, and there
 never will be through this path. macrowhisper reads the field as milliseconds and
 formats it, so a placeholder 0.0 renders as "0ms": a number that looks measured.
-Omitting the key renders {{duration}} as empty instead. Both were verified against
-macrowhisper 2.1.1 on 2026-08-06. A missing value should look missing.
+Omitting the key renders {{duration}} as empty instead. Confirmed live against
+macrowhisper 2.1.1 on 2026-08-08, in Gate 4. A missing value should look missing.
 """
 
 import json
@@ -77,9 +77,11 @@ def build_meta(
     (CustomCommandDeliveryContext), with no duration in it. Measured against
     macrowhisper 2.1.1 on 2026-08-06, writing 0.0 makes {{duration}} render as
     "0ms", indistinguishable from a genuinely instant dictation, while omitting
-    the key renders it as empty. A missing value should look missing, so the
-    parameter stays available for a future native export (Path 2) but defaults
-    to absent.
+    the key renders it as empty (Placeholders.swift:1524-1526 drops a placeholder
+    whose key is absent). Confirmed end to end on 2026-08-08 during Gate 4: a live
+    dictation through the real bridge logged `dur=[]`, not `dur=[0ms]`. A missing
+    value should look missing, so the parameter stays available for a future
+    native export (Path 2) but defaults to absent.
 
     The transcript is stored verbatim. No trimming, no normalization, no cleanup:
     macrowhisper owns text transformation via its own templating and smart-insertion

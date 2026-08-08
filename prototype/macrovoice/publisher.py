@@ -42,6 +42,8 @@ transcript is in the spool it cannot be lost: some later invocation will drain i
 import errno
 import fcntl
 import os
+import re
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,15 +51,21 @@ from typing import Any, Dict, List, Optional
 
 from .meta import serialize_meta
 
-__all__ = ["Publisher", "PublishOutcome", "generate_recording_name"]
+__all__ = ["Publisher", "PublishOutcome", "generate_recording_name", "successor_name"]
 
 # Nanoseconds since the epoch need 19 digits until the year 2286. Zero-padding to a
 # fixed width is what keeps lexicographic order equal to chronological order.
 _NS_WIDTH = 19
 _COUNTER_WIDTH = 3
+_NAME_RE = re.compile(rf"^(\d{{{_NS_WIDTH}}})-(\d{{{_COUNTER_WIDTH}}})$")
 
 DEFAULT_MIN_GAP_S = 1.0
 DEFAULT_DRAIN_BUDGET_S = 6.0  # comfortably under VoiceInk's 10s kill
+
+# Retries for minting a free staging name. Each attempt draws a fresh nanosecond,
+# so realistically one or two suffice; the bound only exists so a frozen clock
+# fails loudly instead of spinning forever.
+_STAGE_ATTEMPTS = 10_000
 
 
 def generate_recording_name(now_ns: int, counter: int = 0) -> str:
@@ -73,6 +81,27 @@ def generate_recording_name(now_ns: int, counter: int = 0) -> str:
     is reachable when several threads publish at once.
     """
     return f"{now_ns:0{_NS_WIDTH}d}-{counter:0{_COUNTER_WIDTH}d}"
+
+
+def successor_name(name: str) -> Optional[str]:
+    """The smallest valid recording name strictly greater than `name`.
+
+    Returns None when `name` is not one of ours, or is already the maximum
+    representable name. None means "no name in our format can beat this", which
+    the caller must treat as "do not publish", never as "publish anyway".
+
+    This exists so the publisher never has to spin waiting for the wall clock to
+    overtake a name. See _next_publish_name for why spinning was unsafe.
+    """
+    match = _NAME_RE.match(name or "")
+    if not match:
+        return None
+    now_ns, counter = int(match.group(1)), int(match.group(2))
+    if counter + 1 < 10**_COUNTER_WIDTH:
+        return generate_recording_name(now_ns, counter + 1)
+    if now_ns + 1 >= 10**_NS_WIDTH:
+        return None
+    return generate_recording_name(now_ns + 1, 0)
 
 
 @dataclass
@@ -148,26 +177,57 @@ class Publisher:
         """
         self._ensure_layout()
 
-        name = self._next_name()
-        staged = self.staging_dir / name
-        while staged.exists():  # pragma: no cover - same-ns collision across processes
-            name = self._next_name()
-            staged = self.staging_dir / name
-
-        staged.mkdir(parents=True)
-        meta_path = staged / "meta.json"
+        # This method must NEVER raise. It runs before the spool, and the whole
+        # design rests on "once a transcript is in the spool it cannot be lost".
+        # An exception here means it never got there: cli.py catches it, logs, and
+        # exits 0 by policy, so the user's words are simply gone with no error.
+        #
+        # Every dictation is a fresh PROCESS, so every Publisher starts at counter
+        # 0, and two landing in the same nanosecond mint an IDENTICAL name. There
+        # are two places that collides, and the original code guarded neither
+        # atomically:
+        #
+        #   staging: `while staged.exists()` then `mkdir()` is check-then-act.
+        #            Both processes saw "no", both called mkdir, the loser got
+        #            FileExistsError. Observed for real on 2026-08-08, in about
+        #            1 run in 8 of the five-concurrent integration test.
+        #   spool:   never checked at all. rename() onto an existing non-empty
+        #            directory fails with ENOTEMPTY.
+        #
+        # Both are closed by letting the atomic syscall be the test and retrying
+        # with a fresh name. mkdir(2) and rename(2) are atomic; exists() is not.
         payload = serialize_meta(meta)
 
-        # fsync the file before the directory becomes reachable, so a crash cannot
-        # leave a folder holding a truncated meta.json.
-        with open(meta_path, "w", encoding="utf-8") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
+        for _ in range(_STAGE_ATTEMPTS):
+            name = self._next_name()
+            staged = self.staging_dir / name
+            try:
+                staged.mkdir(parents=True)
+            except FileExistsError:
+                continue  # another process holds this staging name
 
-        spooled = self.spool_dir / name
-        os.rename(staged, spooled)
-        return spooled
+            meta_path = staged / "meta.json"
+            # fsync the file before the directory becomes reachable, so a crash
+            # cannot leave a folder holding a truncated meta.json.
+            with open(meta_path, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+
+            spooled = self.spool_dir / name
+            try:
+                os.rename(staged, spooled)
+            except OSError:
+                # Another process already spooled this name. Drop our copy and
+                # take a different one; the transcript is still in hand.
+                shutil.rmtree(staged, ignore_errors=True)
+                continue
+            return spooled
+
+        raise RuntimeError(  # pragma: no cover - needs a clock frozen for 10,000 tries
+            f"could not mint a free recording name in {_STAGE_ATTEMPTS} attempts; "
+            "the system clock appears to be frozen"
+        )
 
     # Draining ---------------------------------------------------------------
 
@@ -200,19 +260,33 @@ class Publisher:
         routine under concurrency. Verified live on 2026-08-05: 5 concurrent
         dictations, 5 folders published, only 4 actions fired before this fix.
 
-        The loop also covers a backwards system clock, which would otherwise mint a
-        name below the existing maximum and silently strand the recording.
+        Returns None when no name in our format can exceed what is already there.
+        The caller must then leave the folder spooled: publishing a name below the
+        ceiling would have macrowhisper silently discard it, which is the exact
+        failure this method exists to prevent.
+
+        This used to spin on the clock: `while candidate <= ceiling: mint; sleep(1ms)`.
+        That assumed the clock would eventually overtake the ceiling, and two
+        reachable cases break the assumption permanently, hanging the process:
+
+          1. A FUTURE-DATED folder, from a clock that jumped forward and was then
+             corrected (NTP, restored VM snapshot, DST or timezone bug, dual boot).
+             macrowhisper keeps folders by default, so it persists indefinitely.
+          2. A folder whose name starts with a LETTER, e.g. `zz-old-backup`. Every
+             letter sorts above every digit, so no numeric name can ever win.
+
+        Either one wedged drain() until VoiceInk's 10-second kill, forever, with the
+        spool growing and nothing published. Deriving the successor arithmetically
+        is deterministic, instant, and cannot loop.
         """
         candidate = generate_recording_name(time.time_ns(), self._counter)
         self._counter = (self._counter + 1) % (10**_COUNTER_WIDTH)
 
         ceiling = self._max_published_name()
-        while candidate <= ceiling:
-            candidate = generate_recording_name(time.time_ns(), self._counter)
-            self._counter = (self._counter + 1) % (10**_COUNTER_WIDTH)
-            if candidate <= ceiling:
-                time.sleep(0.001)
-        return candidate
+        if candidate > ceiling:
+            return candidate
+        # The clock cannot beat the ceiling: step just past it instead of waiting.
+        return successor_name(ceiling)
 
     def _spooled_folders(self) -> List[Path]:
         if not self.spool_dir.exists():
@@ -286,7 +360,14 @@ class Publisher:
 
                 # The name is minted HERE, not at stage time, and is guaranteed to
                 # exceed everything already published. See _next_publish_name.
-                target = self.recordings_dir / self._next_publish_name()
+                target_name = self._next_publish_name()
+                if target_name is None:
+                    # Something in recordings/ outranks every name we can produce,
+                    # e.g. a folder starting with a letter. Publishing anyway would
+                    # have macrowhisper drop it silently. Stop and stay spooled: the
+                    # words survive, and a later run recovers once it is gone.
+                    break
+                target = self.recordings_dir / target_name
                 try:
                     os.rename(folder, target)
                 except OSError:  # pragma: no cover - leave it spooled and retry later

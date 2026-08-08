@@ -29,7 +29,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from test_harness import is_valid_recording_meta_json  # noqa: E402
 from macrovoice.meta import build_meta  # noqa: E402
-from macrovoice.publisher import Publisher, generate_recording_name  # noqa: E402
+from unittest import mock  # noqa: E402
+
+import macrovoice.publisher as publisher_module  # noqa: E402
+from macrovoice.publisher import (  # noqa: E402
+    Publisher,
+    generate_recording_name,
+    successor_name,
+)
 
 
 class TestRecordingNames(unittest.TestCase):
@@ -416,6 +423,264 @@ class TestTimeBudget(PublisherTestCase):
             elapsed = time.monotonic() - start
             fcntl.flock(handle, fcntl.LOCK_UN)
         self.assertLess(elapsed, 1.0, "a deferred publish must not block on the lock")
+
+
+class TestUnbeatableCeilingDoesNotWedgeThePublisher(unittest.TestCase):
+    """A name in recordings/ that no clock-derived name can exceed.
+
+    Found 2026-08-08 by reading _next_publish_name for coverage. The original
+    loop was `while candidate <= ceiling: mint again; sleep(1ms)`, which assumes
+    the clock will eventually overtake the ceiling. Two reachable cases break
+    that assumption permanently:
+
+      1. A future-dated folder. A clock that jumps forward and is then corrected
+         (NTP, a restored VM snapshot, a DST or timezone bug, dual boot) leaves a
+         folder stamped ahead of real time. macrowhisper's `moveTo` defaults to
+         keeping folders, so it persists indefinitely.
+      2. A folder whose name starts with a letter, e.g. `zz-old-backup`. Every
+         letter sorts above every digit, so NO numeric name can ever beat it.
+
+    In both cases the loop never terminates. The transcript is safe, because
+    stage() already spooled it, but drain() hangs until VoiceInk's 10-second kill
+    and the spool never empties again. Nothing errors. The bridge just stops
+    working, permanently, which is precisely the silent-failure class this whole
+    project exists to eliminate.
+
+    Each test carries a hard timeout, because the failure mode is a hang: without
+    one, a regression would stall the suite instead of failing it.
+    """
+
+    def setUp(self):
+        self._tmp = TemporaryDirectory()
+        self.watch = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def _publisher(self):
+        pub = Publisher(self.watch, min_gap_s=0.0)
+        pub._ensure_layout()
+        return pub
+
+    def _call_with_timeout(self, fn, seconds=5.0):
+        """Run fn() in a thread so a hang fails the test instead of stalling it."""
+        box = {}
+
+        def run():
+            try:
+                box["value"] = fn()
+            except BaseException as exc:  # noqa: BLE001 - reported below
+                box["error"] = exc
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        thread.join(seconds)
+        if thread.is_alive():
+            self.fail(
+                f"{fn.__name__} did not return within {seconds}s: the unbeatable "
+                "ceiling has wedged the publisher again"
+            )
+        if "error" in box:
+            raise box["error"]
+        return box["value"]
+
+    def test_future_dated_ceiling_still_yields_a_greater_name(self):
+        pub = self._publisher()
+        future = generate_recording_name(time.time_ns() + 10**18)  # ~31 years ahead
+        (pub.recordings_dir / future).mkdir()
+
+        name = self._call_with_timeout(pub._next_publish_name)
+
+        self.assertIsNotNone(name, "a parseable ceiling must always be beatable")
+        self.assertGreater(
+            name, future, "the minted name must exceed the ceiling or macrowhisper drops it"
+        )
+
+    def test_a_publish_over_a_future_ceiling_actually_lands(self):
+        """The property that matters, end to end: the transcript reaches recordings/."""
+        pub = self._publisher()
+        future = generate_recording_name(time.time_ns() + 10**18)
+        (pub.recordings_dir / future).mkdir()
+
+        outcome = self._call_with_timeout(lambda: pub.publish({"result": "hello"}))
+
+        self.assertEqual(len(outcome.published), 1)
+        self.assertFalse(outcome.deferred)
+        published = outcome.published[0]
+        self.assertGreater(published.name, future)
+        self.assertTrue((published / "meta.json").exists())
+
+    def test_non_numeric_ceiling_leaves_the_transcript_spooled(self):
+        """No numeric name can exceed a letter, so publishing is impossible.
+
+        The only honest options are to hang, to publish something macrowhisper
+        will silently discard, or to keep it spooled. Spooled is correct: the
+        words survive, and a later run recovers once the folder is gone.
+        """
+        pub = self._publisher()
+        (pub.recordings_dir / "zz-old-backup").mkdir()
+
+        outcome = self._call_with_timeout(lambda: pub.publish({"result": "hello"}))
+
+        self.assertEqual(outcome.published, [], "must not publish a name that would be dropped")
+        self.assertTrue(outcome.deferred)
+        self.assertTrue(
+            (pub.spool_dir / outcome.spooled.name).exists(),
+            "the transcript must remain in the spool, never discarded",
+        )
+
+    def test_it_recovers_once_the_unbeatable_folder_is_gone(self):
+        pub = self._publisher()
+        blocker = pub.recordings_dir / "zz-old-backup"
+        blocker.mkdir()
+        first = self._call_with_timeout(lambda: pub.publish({"result": "one"}))
+        self.assertTrue(first.deferred)
+
+        blocker.rmdir()
+        second = self._call_with_timeout(lambda: pub.publish({"result": "two"}))
+
+        # Both the backlog entry and the new one drain.
+        self.assertEqual(len(second.published), 2, "the spooled backlog must drain on recovery")
+
+
+class TestStagingNameCollisionAcrossProcesses(unittest.TestCase):
+    """stage() must never raise, because it runs BEFORE the spool.
+
+    The whole design rests on "once a transcript is in the spool it cannot be
+    lost". An exception inside stage() happens before that point, so the
+    transcript is lost outright: cli.py catches it, logs, and exits 0 by policy,
+    and the user never learns their words are gone.
+
+    This was a real defect, found 2026-08-08 in roughly 1 run in 8 of the
+    five-concurrent integration test:
+
+        FileExistsError: [Errno 17] File exists: .../.staging/1786151901562436000-000
+
+    The cause is that every VoiceInk dictation is a fresh PROCESS, so every
+    Publisher starts at counter 0. Two landing in the same nanosecond mint an
+    identical staging name. The old guard was check-then-act:
+
+        while staged.exists(): ...      # both processes see "no"
+        staged.mkdir(parents=True)      # one wins, the other raises
+
+    The existing 12-thread concurrency test could never catch this: threads share
+    one Publisher and therefore one counter, so they never collide. Only separate
+    processes do.
+    """
+
+    def setUp(self):
+        self._tmp = TemporaryDirectory()
+        self.watch = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def test_two_fresh_publishers_in_the_same_nanosecond(self):
+        """Simulates two processes: two Publishers, both at counter 0, one clock."""
+        first = Publisher(self.watch)
+        second = Publisher(self.watch)
+        first._ensure_layout()
+        second._ensure_layout()
+
+        with mock.patch.object(publisher_module.time, "time_ns", return_value=1786151901562436000):
+            a = first.stage({"result": "first dictation"})
+            b = second.stage({"result": "second dictation"})
+
+        self.assertNotEqual(a.name, b.name, "two dictations must not share a folder")
+        for path, expected in ((a, "first dictation"), (b, "second dictation")):
+            self.assertTrue(path.exists())
+            payload = json.loads((path / "meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["result"], expected)
+
+    def test_the_directory_appearing_mid_call_is_survived(self):
+        """The actual race: another process wins between our check and our mkdir.
+
+        Reproduced by making the first mkdir fail exactly as the kernel would.
+        Under the old check-then-act code this raised straight out of stage().
+        """
+        pub = Publisher(self.watch)
+        pub._ensure_layout()
+
+        real_mkdir = Path.mkdir
+        state = {"raised": False}
+
+        def racy_mkdir(self, *args, **kwargs):
+            if not state["raised"] and self.parent.name == ".staging":
+                state["raised"] = True
+                raise FileExistsError(17, "File exists", str(self))
+            return real_mkdir(self, *args, **kwargs)
+
+        with mock.patch.object(Path, "mkdir", racy_mkdir):
+            spooled = pub.stage({"result": "must survive the race"})
+
+        self.assertTrue(state["raised"], "the race was not actually simulated")
+        self.assertTrue(spooled.exists())
+        payload = json.loads((spooled / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["result"], "must survive the race")
+
+    def test_no_transcript_is_lost_across_many_separate_publishers(self):
+        """Each Publisher stands in for one macrovoice process, all sharing a clock."""
+        transcripts = {f"dictation {i}" for i in range(25)}
+        with mock.patch.object(publisher_module.time, "time_ns", return_value=1786151901562436000):
+            for text in sorted(transcripts):
+                pub = Publisher(self.watch)  # fresh process => counter back to 0
+                pub._ensure_layout()
+                pub.stage({"result": text})
+
+        recovered = {
+            json.loads((folder / "meta.json").read_text(encoding="utf-8"))["result"]
+            for folder in (self.watch / ".spool").iterdir()
+        }
+        self.assertEqual(recovered, transcripts, "a transcript was lost before the spool")
+
+
+class TestSuccessorName(unittest.TestCase):
+    """The pure helper that replaces spinning on the clock."""
+
+    def test_increments_the_counter(self):
+        self.assertEqual(
+            successor_name("0000000000000000005-000"), "0000000000000000005-001"
+        )
+
+    def test_rolls_into_the_next_nanosecond_when_the_counter_is_exhausted(self):
+        self.assertEqual(
+            successor_name("0000000000000000005-999"), "0000000000000000006-000"
+        )
+
+    def test_result_always_sorts_above_its_input(self):
+        for name in (
+            "0000000000000000000-000",
+            "1786148563285682000-042",
+            "0000000000000000005-999",
+        ):
+            self.assertGreater(successor_name(name), name)
+
+    def test_unparseable_names_are_refused_rather_than_guessed(self):
+        for name in ("zz-old-backup", "", "not-a-name", "123-456", "0000000000000000005"):
+            self.assertIsNone(successor_name(name), f"{name!r} should be unparseable")
+
+    def test_the_maximum_representable_name_has_no_successor(self):
+        self.assertIsNone(successor_name(f"{10**19 - 1:019d}-999"))
+
+
+class TestSpooledFolders(unittest.TestCase):
+    def test_missing_spool_directory_is_empty_not_an_error(self):
+        with TemporaryDirectory() as tmp:
+            pub = Publisher(Path(tmp))
+            self.assertFalse(pub.spool_dir.exists())
+            self.assertEqual(pub._spooled_folders(), [])
+
+
+class TestDrainBudget(unittest.TestCase):
+    def test_drain_stops_at_the_deadline_and_leaves_the_rest_spooled(self):
+        """The budget exists so drain can never approach VoiceInk's 10s kill."""
+        with TemporaryDirectory() as tmp:
+            pub = Publisher(Path(tmp), min_gap_s=0.0, drain_budget_s=0.0)
+            for i in range(3):
+                pub.stage({"result": f"queued {i}"})
+
+            published = pub.drain()
+
+            self.assertEqual(published, [], "a zero budget must publish nothing")
+            self.assertEqual(
+                len(pub._spooled_folders()), 3, "everything must stay spooled, not vanish"
+            )
 
 
 if __name__ == "__main__":
