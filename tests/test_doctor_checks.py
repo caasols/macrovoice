@@ -28,7 +28,6 @@ class FakeBridge:
             watch_root=Path("/tmp/w"),
             watch_exists=overrides.get("watch_exists", True),
             recordings_exists=overrides.get("recordings_exists", True),
-            recordings_count=overrides.get("recordings_count", 0),
             spool_count=overrides.get("spool_count", 0),
             staging_count=overrides.get("staging_count", 0),
         )

@@ -1,8 +1,8 @@
 Macrowhisper version: 2.9.0
-Config file: /Users/caraujo/.config/macrowhisper/macrowhisper.json
+Config file: /Users/exampleuser/.config/macrowhisper/macrowhisper.json
 Recordings watcher: yes (armed, started 3m ago, last event 1m ago, pending 0)
-Superwhisper folder: /Users/caraujo/mw-bridge
-Recordings folder: /Users/caraujo/mw-bridge/recordings (exists: yes)
+Superwhisper folder: /Users/exampleuser/mw-bridge
+Recordings folder: /Users/exampleuser/mw-bridge/recordings (exists: yes)
 Active action: autoPaste
 moveTo: .delete
 Simulate Escape: no

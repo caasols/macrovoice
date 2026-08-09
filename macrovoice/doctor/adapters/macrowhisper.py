@@ -42,7 +42,6 @@ class StatusSnapshot:
 
     running: bool
     recognized: bool
-    raw: str = ""
     version: Optional[str] = None
     config_path: Optional[str] = None
     watch_folder: Optional[str] = None
@@ -102,7 +101,7 @@ def _parse_watcher_armed(value: Optional[str]) -> Optional[bool]:
 
 def parse_status(text: str) -> StatusSnapshot:
     if NOT_RUNNING_SENTINEL in text:
-        return StatusSnapshot(running=False, recognized=True, raw=text)
+        return StatusSnapshot(running=False, recognized=True)
 
     fields = {}
     for line in text.splitlines():
@@ -114,7 +113,7 @@ def parse_status(text: str) -> StatusSnapshot:
     if VERSION_KEY not in fields:
         # Neither the sentinel nor a version line: this is not macrowhisper's
         # output at all. Say so rather than reporting a daemon-shaped nothing.
-        return StatusSnapshot(running=False, recognized=False, raw=text)
+        return StatusSnapshot(running=False, recognized=False)
 
     watcher = fields.get("Recordings watcher", "")
     pending = _PENDING.search(watcher)
@@ -136,7 +135,6 @@ def parse_status(text: str) -> StatusSnapshot:
     return StatusSnapshot(
         running=True,
         recognized=True,
-        raw=text,
         version=fields.get(VERSION_KEY),
         config_path=fields.get("Config file"),
         watch_folder=fields.get("Superwhisper folder"),
@@ -198,9 +196,7 @@ class Macrowhisper:
         if self._status is None or refresh:
             result = self._run("--status")
             if result.timed_out or result.returncode is None:
-                self._status = StatusSnapshot(
-                    running=False, recognized=False, raw=result.stderr
-                )
+                self._status = StatusSnapshot(running=False, recognized=False)
             else:
                 self._status = parse_status(result.stdout)
         return self._status

@@ -26,7 +26,6 @@ class BridgeSnapshot:
     watch_root: Path
     watch_exists: bool
     recordings_exists: bool
-    recordings_count: int
     spool_count: int
     staging_count: int
 
@@ -53,7 +52,6 @@ class BridgeState:
             watch_root=self.watch_root,
             watch_exists=self.watch_root.is_dir(),
             recordings_exists=recordings.is_dir(),
-            recordings_count=_count(recordings),
             spool_count=_count(self.watch_root / ".spool"),
             staging_count=_count(self.watch_root / ".staging"),
         )

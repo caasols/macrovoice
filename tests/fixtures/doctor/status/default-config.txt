@@ -1,10 +1,10 @@
 Macrowhisper version: 2.1.1
 Socket path: /tmp/macrowhisper-502.sock
-Config file: /Users/caraujo/.config/macrowhisper/macrowhisper.json
+Config file: /Users/exampleuser/.config/macrowhisper/macrowhisper.json
 Recordings watcher: no (not initialized)
-Folder watcher: yes (waiting via /Users/caraujo/Documents, started just now, last event never)
-Superwhisper folder: /Users/caraujo/Documents/superwhisper
-Recordings folder: /Users/caraujo/Documents/superwhisper/recordings (exists: no)
+Folder watcher: yes (waiting via /Users/exampleuser/Documents, started just now, last event never)
+Superwhisper folder: /Users/exampleuser/Documents/superwhisper
+Recordings folder: /Users/exampleuser/Documents/superwhisper/recordings (exists: no)
 Active action: autoPaste
 Icon: (none)
 moveTo: (none)

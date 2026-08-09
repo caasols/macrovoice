@@ -6,7 +6,7 @@ diagnostic. That is B5's lesson applied to a different surface.
 """
 
 import subprocess
-from typing import Callable, List, NamedTuple, Optional
+from typing import List, NamedTuple, Optional
 
 
 class CommandResult(NamedTuple):
@@ -30,6 +30,3 @@ def run_command(args: List[str], timeout: float) -> CommandResult:
     except OSError as exc:
         return CommandResult(None, "", str(exc), False)
     return CommandResult(completed.returncode, completed.stdout, completed.stderr, False)
-
-
-Runner = Callable[[List[str], float], CommandResult]

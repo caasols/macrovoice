@@ -9,6 +9,11 @@ and false of the output.
 The parser must be TOLERANT. The failure we must never have is doctor reporting
 simEsc as fine because macrowhisper reworded a line, so an unrecognised field
 stays None and surfaces as UNKNOWN.
+
+The fixtures are real captured `--status` output with one edit: the home
+directory's username is replaced with `exampleuser`, because this repository is
+public and those were the only tracked files carrying the machine's username.
+Everything else is byte-identical to what macrowhisper printed.
 """
 
 import sys
@@ -46,9 +51,9 @@ class TestRunningDaemon(unittest.TestCase):
         self.assertEqual(self.snap.watcher_started_ago_s, 6 * 3600)
 
     def test_folders(self):
-        self.assertEqual(self.snap.watch_folder, "/Users/caraujo/mw-bridge")
+        self.assertEqual(self.snap.watch_folder, "/Users/exampleuser/mw-bridge")
         self.assertEqual(
-            self.snap.recordings_folder, "/Users/caraujo/mw-bridge/recordings"
+            self.snap.recordings_folder, "/Users/exampleuser/mw-bridge/recordings"
         )
         self.assertTrue(self.snap.recordings_folder_exists)
 
@@ -59,7 +64,7 @@ class TestRunningDaemon(unittest.TestCase):
 
     def test_config_path(self):
         self.assertEqual(
-            self.snap.config_path, "/Users/caraujo/.config/macrowhisper/macrowhisper.json"
+            self.snap.config_path, "/Users/exampleuser/.config/macrowhisper/macrowhisper.json"
         )
 
 
