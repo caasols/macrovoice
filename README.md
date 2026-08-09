@@ -198,23 +198,23 @@ delivered, and a 633-character dictation arrived intact.
 
 ## Tests
 
-161 tests, **99% branch coverage with zero missing statements**. CI runs the suite on macOS
+171 tests, **99% branch coverage with zero missing statements**. CI runs the suite on macOS
 across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice.sh` execs
 `/usr/bin/env python3`, and on a stock Mac that is the system Python.
 
 | File | Tests | Covers |
 | --- | --- | --- |
 | `tests/test_publisher.py` | 44 | Staging, spool, drain lock, burst spacing, atomic renames, name monotonicity, cross-process collisions |
+| `tests/test_cli.py` | 25 | The CLI driven through real subprocesses, including the exit-code policy and the open-stdin regression |
 | `tests/test_harness_port.py` | 24 | That the oracle still matches macrowhisper's validation gate, branch for branch |
 | `tests/test_meta.py` | 23 | A 31-entry escaping matrix and the `meta.json` schema contract |
-| `tests/test_cli.py` | 21 | The CLI driven through real subprocesses, including the exit-code policy |
+| `tests/test_transcript.py` | 22 | Env and stdin resolution, the empty-input policy, and whether stdin needs reading at all |
 | `tests/test_integration_safety.py` | 20 | The integration suite's own guard against hijacking your macrowhisper |
-| `tests/test_transcript.py` | 16 | Env and stdin resolution, and the empty-input policy |
 | `tests/test_voiceink_invocation.py` | 8 | The `.sh` wrappers through `/bin/zsh -lc`, exactly as VoiceInk calls them |
 | `tests/test_integration_macrowhisper.py` | 5 | Opt-in; drives a **real macrowhisper daemon** |
 
 ```sh
-python3 -m unittest discover -s tests -t tests -v      # 161 tests, 5 skipped
+python3 -m unittest discover -s tests -t tests -v      # 171 tests, 5 skipped
 MACROVOICE_INTEGRATION=1 python3 -m unittest discover -s tests -t tests
 ```
 
@@ -229,9 +229,12 @@ JSON lookalikes and shell metacharacters. Other tests assert name monotonicity a
 sequential calls, that a watcher thread never observes a directory without its `meta.json`, and
 zero transcript loss under 12-thread concurrency.
 
-Two regression tests exist because the failure they guard is a **hang**, so they carry hard
-timeouts: a future-dated folder, or one whose name starts with a letter, used to make the
-publisher spin forever waiting for the clock to overtake it.
+Several regression tests exist because the failure they guard is a **hang**, so they carry hard
+timeouts. A future-dated folder, or one whose name starts with a letter, used to make the
+publisher spin forever waiting for the clock to overtake it. Separately, the CLI used to read
+stdin before checking whether the environment already held the transcript, so a caller that
+opened a pipe and never closed it (launchd, cron, CI, a backgrounded shell) blocked forever
+*before* the transcript reached the spool, which is the one place it cannot be lost from.
 
 The integration tests are opt-in because they launch a real daemon. They confine themselves to a
 temporary watch directory and a temporary config, so `~/mw-bridge` and `~/.config/macrowhisper/`
