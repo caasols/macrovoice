@@ -215,14 +215,18 @@ delivered, and a 633-character dictation arrived intact.
 
 ## Tests
 
-301 tests: 171 on the delivery path, **99% branch coverage with zero missing statements**, plus
-130 for `doctor` (its coverage has not been separately measured). CI runs the suite on macOS
-across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice.sh` execs
+351 tests, 5 skipped: 175 on the delivery path, 176 for `doctor`. Total branch coverage is 99%,
+now measured across the whole package, not just the delivery path. Every delivery-path module
+(`transcript.py`, `meta.py`, `publisher.py`, `cli.py`) is at 100%, and so is most of `doctor`:
+`model.py`, `registry.py`, `runner.py`, `report.py`, and `process.py`. What is left uncovered:
+`__main__.py`'s entry-point guard, two loop branches in the bridge adapter, and four spots in the
+macrowhisper adapter, none reachable without a real daemon in the loop. CI runs the suite on
+macOS across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice.sh` execs
 `/usr/bin/env python3`, and on a stock Mac that is the system Python.
 
 | File | Tests | Covers |
 | --- | --- | --- |
-| `tests/test_publisher.py` | 44 | Staging, spool, drain lock, burst spacing, atomic renames, name monotonicity, cross-process collisions |
+| `tests/test_publisher.py` | 48 | Staging, spool, drain lock, burst spacing, atomic renames, name monotonicity, cross-process collisions, and a future-dated `.last-publish` no longer stalling delivery |
 | `tests/test_cli.py` | 25 | The CLI driven through real subprocesses, including the exit-code policy and the open-stdin regression |
 | `tests/test_harness_port.py` | 24 | That the oracle still matches macrowhisper's validation gate, branch for branch |
 | `tests/test_meta.py` | 23 | A 31-entry escaping matrix and the `meta.json` schema contract |
@@ -230,10 +234,10 @@ across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice.sh` e
 | `tests/test_integration_safety.py` | 20 | The integration suite's own guard against hijacking your macrowhisper |
 | `tests/test_voiceink_invocation.py` | 8 | The `.sh` wrappers through `/bin/zsh -lc`, exactly as VoiceInk calls them |
 | `tests/test_integration_macrowhisper.py` | 5 | Opt-in; drives a **real macrowhisper daemon** |
-| `tests/test_doctor_*.py` (7 files) | 130 | `doctor`'s checks, adapters, runner, report and status parser, exercised without a real macrowhisper |
+| `tests/test_doctor_*.py` (8 files) | 176 | `doctor`'s checks, adapters, runner, report and status parser, exercised without a real macrowhisper |
 
 ```sh
-python3 -m unittest discover -s tests -t tests -v      # 301 tests, 5 skipped
+python3 -m unittest discover -s tests -t tests -v      # 351 tests, 5 skipped
 MACROVOICE_INTEGRATION=1 python3 -m unittest discover -s tests -t tests
 ```
 
