@@ -87,17 +87,55 @@ class BridgeState:
             return ()
 
         cutoff = datetime.now(timezone.utc) - timedelta(hours=within_hours)
+        lines = tail.splitlines()
         found = []
-        for line in tail.splitlines():
-            if " ERROR" not in line:
-                continue
-            stamp = line.split(" ", 1)[0]
+
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+
+            # Check if this line starts with a timestamp (header line).
+            stamp = line.split(" ", 1)[0] if line else ""
             try:
                 when = datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(
                     tzinfo=timezone.utc
                 )
             except ValueError:
+                # Not a header line, skip it.
+                i += 1
                 continue
-            if when >= cutoff:
-                found.append(line)
+
+            # It is a header line. Check if it contains ERROR and is recent.
+            if " ERROR" not in line or when < cutoff:
+                i += 1
+                continue
+
+            # Found a matching error entry. Collect continuation lines.
+            entry = line
+            i += 1
+            continuation_lines = []
+
+            while i < len(lines):
+                next_line = lines[i]
+                # Check if this is a new header (starts with timestamp).
+                next_stamp = next_line.split(" ", 1)[0] if next_line else ""
+                try:
+                    datetime.strptime(next_stamp, "%Y-%m-%dT%H:%M:%SZ")
+                    # It is a new header, stop collecting continuation lines.
+                    break
+                except ValueError:
+                    # Not a header, it is a continuation line.
+                    continuation_lines.append(next_line)
+                    i += 1
+
+            # If there are continuation lines, append the last non-empty one.
+            if continuation_lines:
+                # Find the last non-empty line.
+                for cont_line in reversed(continuation_lines):
+                    if cont_line.strip():
+                        entry = entry + " ... " + cont_line.strip()
+                        break
+
+            found.append(entry)
+
         return tuple(found[-MAX_REPORTED_ERRORS:])

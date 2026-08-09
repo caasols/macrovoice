@@ -1,6 +1,7 @@
 """Adapters, driven through an injected fake runner so no daemon is involved."""
 
 import sys
+import traceback
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -200,6 +201,55 @@ class TestBridgeState(unittest.TestCase):
             )
             errors = BridgeState(root).recent_log_errors(within_hours=24)
             self.assertEqual(len(errors), 1)
+
+    def test_multiline_traceback_entry_keeps_exception_line(self):
+        from datetime import datetime as dt, timedelta, timezone
+
+        # Create a realistic multi-line traceback entry.
+        stamp = (dt.now(timezone.utc) - timedelta(minutes=5)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            body = traceback.format_exc().strip()
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "macrovoice.log").write_text(
+                "%s ERROR (exiting 0 anyway): %s\n" % (stamp, body),
+                encoding="utf-8",
+            )
+            errors = BridgeState(root).recent_log_errors(within_hours=24)
+            # A multi-line body should be returned as a single entry.
+            self.assertEqual(len(errors), 1)
+            # The returned entry should contain both the header and the exception.
+            self.assertIn("ERROR (exiting 0 anyway)", errors[0])
+            self.assertIn("ValueError: boom", errors[0])
+
+    def test_multiline_entry_not_absorbed_by_following_non_error_line(self):
+        from datetime import datetime as dt, timedelta, timezone
+
+        stamp = (dt.now(timezone.utc) - timedelta(minutes=5)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            body = traceback.format_exc().strip()
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log_content = (
+                "%s ERROR (exiting 0 anyway): %s\n"
+                "%s published 1786289113229804000-000 chars=73\n"
+            ) % (stamp, body, stamp)
+            (root / "macrovoice.log").write_text(log_content, encoding="utf-8")
+            errors = BridgeState(root).recent_log_errors(within_hours=24)
+            # Should have exactly one error (the multi-line entry).
+            self.assertEqual(len(errors), 1)
+            # The published line should not be part of the error.
+            self.assertNotIn("published", errors[0])
 
 
 if __name__ == "__main__":
