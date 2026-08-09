@@ -97,13 +97,20 @@ dictation and that nothing was pasted into the focused app.
 **5. Go live**
 
 Point the Mode at `macrovoice.sh`, switch back with `macrowhisper --action autoPaste`, grant
-macrowhisper Accessibility permission, focus a text field, and dictate. Say "google best pizza"
-to try the voice trigger from the sample config.
+macrowhisper Accessibility permission, focus a text field, and dictate. Say "ask google best
+pizza" or "google best pizza" to try the voice trigger from the sample config, which ships both
+phrasings as `"triggerVoice": "ask google|google"`.
 
 Voice triggers are **prefix-anchored**: macrowhisper builds `"^(?i)" + escaped pattern`
-(`Utils/TriggerEvaluator.swift:205`), so the trigger word must be the **first** word. "Google
-best pizza" matches; "Can you Google the best pizza" does not, and silently falls through to
-your default action.
+(`Utils/TriggerEvaluator.swift:205`), so the trigger must be at the **start** of the dictation.
+`|` separates alternatives and each one is anchored independently, which is why the sample lists
+"ask google" as well as the bare word. "Google best pizza" and "Ask Google best pizza" both
+match; "Can you Google the best pizza" does not, and silently falls through to your default
+action.
+
+Matching is a raw prefix, not a word boundary, so "googled the answer" also matches and searches
+for the leftover "D the answer". Use a `==regex==` trigger if that matters to you, remembering
+that raw regex disables the automatic prefix stripping.
 
 VoiceInk does not tell the command which Mode fired, so bake the name into each Mode's command
 if you want `triggerModes` to work:

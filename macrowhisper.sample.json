@@ -50,7 +50,7 @@
   "urls": {
     "google": {
       "action": "https://www.google.com/search?q={{swResult}}",
-      "triggerVoice": "google",
+      "triggerVoice": "ask google|google",
       "openBackground": false
     }
   },
