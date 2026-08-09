@@ -316,9 +316,22 @@ class Publisher:
 
         Returns False if waiting would exceed the drain deadline, in which case the
         caller must stop draining and leave the rest spooled.
+
+        The wait is capped at min_gap_s. `.last-publish` is read from disk, and a
+        value in the future (a clock jump forward then an NTP correction back, a
+        restored VM snapshot, a hand-edited file) would otherwise make `remaining`
+        arbitrarily large, trip the deadline guard below, and stall every later
+        publish permanently. Measured 2026-08-09: transcripts spooled and were
+        never delivered, with nothing surfacing it.
+
+        Capping is safe because the gap IS the longest wait the spacing rule can
+        ever require. Rejecting a future timestamp instead would misfire on the
+        ordinary clock jitter between two processes and skip the gap entirely,
+        weakening the defence against macrowhisper's burst protection dropping
+        dictations. Do not "simplify" this into a freshness check on the file.
         """
         elapsed = time.time() - self._read_last_publish()
-        remaining = self.min_gap_s - elapsed
+        remaining = min(self.min_gap_s - elapsed, self.min_gap_s)
         if remaining <= 0:
             return True
         if time.monotonic() + remaining > deadline:

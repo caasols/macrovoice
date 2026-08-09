@@ -683,5 +683,69 @@ class TestDrainBudget(unittest.TestCase):
             )
 
 
+class TestGapSurvivesClockAnomalies(unittest.TestCase):
+    """A `.last-publish` timestamp in the future must not stall delivery.
+
+    Measured 2026-08-09: with that file set a year ahead, every publish deferred
+    and the spool grew without bound. Transcripts were never lost, because the
+    spool holds them, but they were never delivered either and nothing surfaced
+    it. Same hazard class as the `_next_publish_name` spin fixed 2026-08-08.
+    """
+
+    def _publisher(self, root, gap):
+        # Constructing the Publisher creates the watch directories, so this must
+        # happen before writing .last-publish into them.
+        return Publisher(root, min_gap_s=gap)
+
+    def _slept_for(self, publisher, offset_s, gap):
+        """Return the durations time.sleep was asked for, deterministically."""
+        stamp = time.time() + offset_s
+        (publisher.watch_root / ".last-publish").write_text("%.6f" % stamp)
+        slept = []
+        with mock.patch("macrovoice.publisher.time.sleep", slept.append):
+            granted = publisher._wait_for_gap(time.monotonic() + 30.0)
+        return granted, slept
+
+    def test_a_year_in_the_future_does_not_stall_publication(self):
+        with TemporaryDirectory() as tmp:
+            publisher = self._publisher(Path(tmp), 0.5)
+            granted, slept = self._slept_for(publisher, 365 * 86400, 0.5)
+            self.assertTrue(granted)
+            self.assertTrue(slept, "expected a bounded wait, not no wait at all")
+            self.assertLessEqual(slept[0], 0.5 + 1e-6)
+
+    def test_slight_future_skew_still_waits_the_full_gap(self):
+        # Ordinary clock jitter between two processes. The fix must NOT treat
+        # this as unusable and skip the gap: the gap is what defends against
+        # macrowhisper's burst protection silently dropping dictations.
+        with TemporaryDirectory() as tmp:
+            publisher = self._publisher(Path(tmp), 0.5)
+            granted, slept = self._slept_for(publisher, 0.05, 0.5)
+            self.assertTrue(granted)
+            self.assertTrue(slept)
+            self.assertGreater(slept[0], 0.4)
+
+    def test_a_normal_recent_publish_waits_only_the_remainder(self):
+        with TemporaryDirectory() as tmp:
+            publisher = self._publisher(Path(tmp), 0.5)
+            granted, slept = self._slept_for(publisher, -0.1, 0.5)
+            self.assertTrue(granted)
+            self.assertTrue(slept)
+            self.assertLess(slept[0], 0.45)
+
+    def test_end_to_end_a_future_stamp_still_publishes(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            publisher = self._publisher(root, 0.01)
+            publisher.publish(build_meta("first", mode_name="t"))
+            (root / ".last-publish").write_text("%.6f" % (time.time() + 365 * 86400))
+            outcome = Publisher(root, min_gap_s=0.01).publish(
+                build_meta("second", mode_name="t")
+            )
+            self.assertFalse(
+                outcome.deferred, "a future .last-publish must not defer forever"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
