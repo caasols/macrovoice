@@ -32,9 +32,9 @@ _MARKERS = {
     (Outcome.UNKNOWN, Severity.INFO): "unknown",
 }
 
-_MARKER_WIDTH = 7
+_MARKER_WIDTH = 8
 _INDENT = "  "
-_DETAIL_INDENT = " " * (len(_INDENT) + _MARKER_WIDTH + 2)
+_DETAIL_INDENT = " " * (len(_INDENT) + _MARKER_WIDTH + 1)
 
 
 def _group_of(check_id: str) -> str:
@@ -73,20 +73,25 @@ def render(results: List[Result]) -> str:
         for r in results
         if r.finding.outcome is Outcome.PROBLEM and r.check.severity is Severity.WARN
     )
+    notes = sum(
+        1
+        for r in results
+        if r.finding.outcome is Outcome.PROBLEM and r.check.severity is Severity.INFO
+    )
     unknowns = sum(1 for r in results if r.finding.outcome is Outcome.UNKNOWN)
     oks = sum(1 for r in results if r.finding.outcome is Outcome.OK)
 
-    lines.append(
-        "%d problem%s, %d warning%s, %d unknown, %d ok"
-        % (
-            problems,
-            "" if problems == 1 else "s",
-            warnings,
-            "" if warnings == 1 else "s",
-            unknowns,
-            oks,
-        )
+    summary = "%d problem%s, %d warning%s, %d unknown, %d ok" % (
+        problems,
+        "" if problems == 1 else "s",
+        warnings,
+        "" if warnings == 1 else "s",
+        unknowns,
+        oks,
     )
+    if notes:
+        summary += ", %d note%s" % (notes, "" if notes == 1 else "s")
+    lines.append(summary)
     return "\n".join(lines) + "\n"
 
 

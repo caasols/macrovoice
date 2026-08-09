@@ -76,6 +76,29 @@ class TestRender(unittest.TestCase):
         self.assertNotIn("—", rendered)  # an em-dash, which house rules forbid
         self.assertTrue(all(ord(ch) < 0x2500 for ch in rendered))
 
+    def test_info_severity_problem_is_counted_as_note(self):
+        results = [
+            result("pre.python", Finding.ok("fine")),
+            result(
+                "bridge.version",
+                Finding.problem("macrowhisper is not the tested version"),
+                severity=Severity.INFO,
+                title="macrowhisper version matches",
+            ),
+            result("mw.running", Finding.problem("not running"), severity=Severity.WARN),
+        ]
+        rendered = render(results)
+        self.assertIn("0 problems, 1 warning, 0 unknown, 1 ok, 1 note", rendered)
+
+    def test_summary_omits_notes_when_none(self):
+        results = [
+            result("pre.python", Finding.ok("fine")),
+            result("mw.running", Finding.problem("not running"), severity=Severity.WARN),
+        ]
+        rendered = render(results)
+        self.assertIn("0 problems, 1 warning, 0 unknown, 1 ok", rendered)
+        self.assertNotIn("note", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()
