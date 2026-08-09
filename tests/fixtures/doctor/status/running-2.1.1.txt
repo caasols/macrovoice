@@ -1,0 +1,20 @@
+Macrowhisper version: 2.1.1
+Socket path: /tmp/macrowhisper-502.sock
+Config file: /Users/caraujo/.config/macrowhisper/macrowhisper.json
+Recordings watcher: yes (armed, started 6h ago, last event 6h ago, pending 0)
+Folder watcher: no (not initialized)
+Superwhisper folder: /Users/caraujo/mw-bridge
+Recordings folder: /Users/caraujo/mw-bridge/recordings (exists: yes)
+Active action: autoPaste
+Icon: (none)
+moveTo: .delete
+Auto-return: disabled
+Scheduled action: (none)
+persistentMuteTriggers: no
+runtimeMuteTriggers: inactive
+effectiveMuteTriggers: no
+disableUpdateCheck: yes
+muteNotifications: yes
+simEsc: no
+simKeypress: no
+redactedLogs: yes

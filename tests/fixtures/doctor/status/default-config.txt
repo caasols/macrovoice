@@ -1,0 +1,25 @@
+Macrowhisper version: 2.1.1
+Socket path: /tmp/macrowhisper-502.sock
+Config file: /Users/caraujo/.config/macrowhisper/macrowhisper.json
+Recordings watcher: no (not initialized)
+Folder watcher: yes (waiting via /Users/caraujo/Documents, started just now, last event never)
+Superwhisper folder: /Users/caraujo/Documents/superwhisper
+Recordings folder: /Users/caraujo/Documents/superwhisper/recordings (exists: no)
+Active action: autoPaste
+Icon: (none)
+moveTo: (none)
+Auto-return: disabled
+Scheduled action: (none)
+persistentMuteTriggers: no
+runtimeMuteTriggers: inactive
+effectiveMuteTriggers: no
+disableUpdateCheck: no
+muteNotifications: no
+simEsc: yes
+simKeypress: no
+redactedLogs: yes
+actionDelay: 0.00s
+simReturn: no
+returnDelay: 0.15s
+history retention: (disabled)
+Info: Waiting for recordings folder to appear at expected path.
