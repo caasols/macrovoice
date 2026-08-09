@@ -14,9 +14,24 @@ parameter by a per-Mode wrapper rather than discovered at runtime.
 
 from typing import Mapping, Optional
 
-__all__ = ["ENV_VAR", "resolve_transcript"]
+__all__ = ["ENV_VAR", "env_supplies_transcript", "resolve_transcript"]
 
 ENV_VAR = "VOICEINK_TRANSCRIPT"
+
+
+def env_supplies_transcript(env: Mapping[str, str]) -> bool:
+    """True when VOICEINK_TRANSCRIPT is set to a non-empty string.
+
+    Callers use this to decide whether stdin needs reading AT ALL. It is the
+    same truthiness test resolve_transcript applies below, exposed so the rule
+    lives in one module rather than being restated by every caller.
+
+    Note this is deliberately True for a WHITESPACE-ONLY value. VoiceInk did
+    deliver something; resolve_transcript will decline to publish it, and stdin
+    must not be consulted, because that would publish text VoiceInk never meant
+    as the transcript.
+    """
+    return bool(env.get(ENV_VAR))
 
 
 def resolve_transcript(env: Mapping[str, str], stdin_text: str) -> Optional[str]:

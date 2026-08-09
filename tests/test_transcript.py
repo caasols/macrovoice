@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from macrovoice.transcript import resolve_transcript  # noqa: E402
+from macrovoice.transcript import env_supplies_transcript, resolve_transcript  # noqa: E402
 
 
 class TestEnvPreferred(unittest.TestCase):
@@ -93,6 +93,46 @@ class TestContentPreservation(unittest.TestCase):
         # Shell pipelines routinely append a newline. We keep it; macrowhisper's
         # smartSpacing handles trailing whitespace at insert time.
         self.assertEqual(resolve_transcript({}, "hello\n"), "hello\n")
+
+
+class TestEnvSuppliesTranscript(unittest.TestCase):
+    """The predicate cli.py uses to decide whether stdin needs reading AT ALL.
+
+    It exists so the precedence rule lives in ONE module. cli.py used to read
+    stdin unconditionally and consult the env var afterwards, which is what made
+    the B5 hang reachable: an open, silent pipe blocked forever, in front of the
+    spool, and the transcript was lost with nothing logged.
+    """
+
+    def test_absent_env_var(self):
+        self.assertFalse(env_supplies_transcript({}))
+
+    def test_empty_env_var(self):
+        self.assertFalse(env_supplies_transcript({"VOICEINK_TRANSCRIPT": ""}))
+
+    def test_whitespace_only_env_var_still_counts_as_supplied(self):
+        # Deliberately True, and this is the subtle one. VoiceInk DID deliver
+        # something. resolve_transcript will decline to publish it, and stdin
+        # must not be consulted, because falling through would publish text
+        # VoiceInk never meant as the transcript.
+        self.assertTrue(env_supplies_transcript({"VOICEINK_TRANSCRIPT": "   "}))
+
+    def test_normal_transcript(self):
+        self.assertTrue(env_supplies_transcript({"VOICEINK_TRANSCRIPT": "hello"}))
+
+    def test_other_variables_are_ignored(self):
+        self.assertFalse(env_supplies_transcript({"VOICEINK_OTHER": "hello"}))
+
+    def test_agrees_with_resolve_transcript_on_whether_stdin_matters(self):
+        # The contract between the two functions: whenever the predicate is
+        # True, resolve_transcript's answer does not depend on stdin at all.
+        for value in ("hello", "   ", "multi\nline"):
+            env = {"VOICEINK_TRANSCRIPT": value}
+            self.assertTrue(env_supplies_transcript(env))
+            self.assertEqual(
+                resolve_transcript(env, ""),
+                resolve_transcript(env, "completely different stdin text"),
+            )
 
 
 if __name__ == "__main__":

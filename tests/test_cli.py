@@ -47,6 +47,52 @@ class CliTestCase(unittest.TestCase):
             timeout=timeout,
         )
 
+    def spawn_cli_with_open_stdin(self, *args, transcript=None, timeout=8):
+        """Launch the CLI with stdin held OPEN and SILENT, then wait for exit.
+
+        This is the only shape that reproduces B5. subprocess.run(input=...)
+        closes stdin, so run_cli above can never trigger it. Here the pipe is
+        opened and then neither written to nor closed, which is exactly what a
+        launchd job, a cron entry, a CI wrapper or a backgrounded shell does.
+
+        Fails the test on timeout rather than returning, because the regression
+        is a HANG: without a hard deadline it would stall the whole suite
+        instead of failing one test.
+        """
+        env = dict(os.environ)
+        env.pop("VOICEINK_TRANSCRIPT", None)
+        if transcript is not None:
+            env["VOICEINK_TRANSCRIPT"] = transcript
+
+        proc = subprocess.Popen(
+            [
+                sys.executable, "-m", "macrovoice",
+                "--watch", str(self.watch), "--gap", "0.01", *args,
+            ],
+            stdin=subprocess.PIPE,  # opened, never written, never closed
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=str(REPO_ROOT),
+            env=env,
+            text=True,
+        )
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            self.fail(
+                f"macrovoice did not exit within {timeout}s while stdin was held "
+                "open. B5 has regressed: stdin is being read before the env var "
+                "is consulted. That blocks in front of stage(), so the transcript "
+                "never reaches the spool and VoiceInk's 10s kill loses it silently."
+            )
+        finally:
+            proc.stdin.close()
+            proc.stdout.close()
+            proc.stderr.close()
+        return proc.returncode
+
     @property
     def recordings(self):
         return self.watch / "recordings"
@@ -258,6 +304,54 @@ class TestSequentialDictations(CliTestCase):
             timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.published(), [])
+
+
+class TestOpenStdinDoesNotBlock(CliTestCase):
+    """B5: reading stdin before consulting the env var could hang forever.
+
+    Diagnosed 2026-08-08, reproduced 2026-08-09. cli.py read stdin
+    unconditionally whenever it was not a tty, BEFORE anyone asked whether it
+    was needed, so a parent that opened a pipe and never wrote or closed it made
+    read() wait forever. The block sits in front of stage(), which inverts its
+    severity: every other failure in this tool is survivable because spooling
+    happens first, and this one is not. VoiceInk's 10s kill
+    (TranscriptionDelivery.swift:115) then fires and the words are gone with
+    nothing logged anywhere.
+    """
+
+    def test_env_var_set_does_not_block_on_an_open_stdin(self):
+        code = self.spawn_cli_with_open_stdin(transcript="env wins, stdin never closes")
+
+        self.assertEqual(code, 0, "the delivery path must always exit 0")
+        self.assertEqual(self.sole_meta()["result"], "env wins, stdin never closes")
+
+    def test_stdin_is_not_read_at_all_when_the_env_var_wins(self):
+        # Both channels carry text, and they disagree. The env var must win, per
+        # the precedence documented in transcript.resolve_transcript. This pins
+        # the rule while we are changing the code around it.
+        result = self.run_cli(transcript="from the env var", stdin_text="from stdin")
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(self.sole_meta()["result"], "from the env var")
+
+    def test_a_whitespace_only_env_var_does_not_reach_for_stdin(self):
+        # The case a naive short-circuit gets wrong. A whitespace-only env var
+        # means VoiceInk delivered something unpublishable, NOT that the channel
+        # was unavailable, so stdin must not be consulted and nothing is
+        # published. Held open here so a regression shows up as a hang too.
+        code = self.spawn_cli_with_open_stdin(transcript="   ")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(self.published(), [], "whitespace must publish nothing")
+
+    def test_drain_only_does_not_block_on_an_open_stdin(self):
+        # --drain-only returns at cli.py:95-98, before any stdin handling, so it
+        # is safe today. This test keeps it that way: it reads no transcript, so
+        # it must never wait on one.
+        code = self.spawn_cli_with_open_stdin("--drain-only")
+
+        self.assertEqual(code, 0)
         self.assertEqual(self.published(), [])
 
 

@@ -22,7 +22,7 @@ from pathlib import Path
 
 from .meta import build_meta
 from .publisher import DEFAULT_MIN_GAP_S, Publisher
-from .transcript import resolve_transcript
+from .transcript import env_supplies_transcript, resolve_transcript
 
 DEFAULT_WATCH = "~/mw-bridge"
 LOG_NAME = "macrovoice.log"
@@ -97,7 +97,20 @@ def main(argv=None) -> int:
             _log(watch_root, f"drain-only: published {len(published)}")
             return 0
 
-        stdin_text = "" if sys.stdin.isatty() else sys.stdin.read()
+        if env_supplies_transcript(os.environ) or sys.stdin.isatty():
+            # The env var already carries the words, so stdin cannot change the
+            # answer. Reading it anyway is what made B5 reachable: an open pipe
+            # that never reaches EOF blocked here forever, in front of stage(),
+            # so the transcript never reached the spool.
+            stdin_text = ""
+        else:
+            # No env var: stdin genuinely IS the only source of the words, so
+            # this read must be allowed to block, and that is deliberate.
+            # VoiceInk always closes the pipe. A deadline here would have no
+            # basis to choose, and a truncated read would be worse than a hang:
+            # it would publish half a dictation as though it were whole.
+            # Decided 2026-08-09. Do not "fix" this into a timeout.
+            stdin_text = sys.stdin.read()
         transcript = resolve_transcript(os.environ, stdin_text)
 
         if transcript is None:
