@@ -24,6 +24,7 @@ VERSION_KEY = "Macrowhisper version"
 _AGE = re.compile(r"started\s+(\d+)\s*([smhd])\s+ago")
 _PENDING = re.compile(r"pending\s+(\d+)")
 _EXISTS = re.compile(r"\(exists:\s*(yes|no)\)")
+_WATCHER_ARMED = re.compile(r"^(yes|no)\b")
 _AGE_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
 
@@ -59,6 +60,23 @@ def yes_no(value: Optional[str]) -> Optional[bool]:
     if text in ("no", "false"):
         return False
     return None
+
+
+def _parse_watcher_armed(value: Optional[str]) -> Optional[bool]:
+    """Parse watcher armed status from RecordingsFolderWatcher.swift:206-214.
+
+    Matches three possible strings:
+    - "yes (armed, ...)" returns True
+    - "no (not armed)" returns False
+    - "no (folder missing)" returns False
+    - Any other string returns None (never guesses)
+    """
+    if not value:
+        return None
+    match = _WATCHER_ARMED.match(value)
+    if not match:
+        return None
+    return yes_no(match.group(1))
 
 
 def parse_status(text: str) -> StatusSnapshot:
@@ -99,7 +117,7 @@ def parse_status(text: str) -> StatusSnapshot:
         recordings_folder=recordings,
         recordings_folder_exists=exists,
         watcher_present=yes_no(watcher.split(" ")[0]) if watcher else None,
-        watcher_armed=("armed" in watcher) if watcher else None,
+        watcher_armed=_parse_watcher_armed(watcher),
         watcher_pending=int(pending.group(1)) if pending else None,
         watcher_started_ago_s=(
             int(age.group(1)) * _AGE_UNITS[age.group(2)] if age else None

@@ -98,5 +98,51 @@ class TestTolerance(unittest.TestCase):
         self.assertFalse(snap.recognized)
 
 
+class TestWatcherArmedParsing(unittest.TestCase):
+    """Test watcher_armed parsing from RecordingsFolderWatcher.swift:206-214.
+
+    These tests verify that watcher_armed is parsed from the exact output
+    strings, not by substring containment. The regression test covers the bug
+    where "armed" in "no (not armed)" was True.
+    """
+
+    def test_armed_from_yes_string(self):
+        """yes (armed, ...) from RecordingsFolderWatcher.swift:214"""
+        snap = parse_status(
+            "Macrowhisper version: 2.1.1\n"
+            "Recordings watcher: yes (armed, started 6h ago, last event 6h ago, pending 0)\n"
+        )
+        self.assertIs(snap.watcher_armed, True)
+
+    def test_not_armed_from_no_not_armed_string_regression(self):
+        """no (not armed) from RecordingsFolderWatcher.swift:211 - regression for substring containment bug.
+
+        This is the critical case: "armed" appears in the string as "not armed",
+        so substring containment would incorrectly return True. We must parse
+        the exact strings from the source.
+        """
+        snap = parse_status(
+            "Macrowhisper version: 2.1.1\n"
+            "Recordings watcher: no (not armed)\n"
+        )
+        self.assertIs(snap.watcher_armed, False)
+
+    def test_not_armed_from_folder_missing_string(self):
+        """no (folder missing) from RecordingsFolderWatcher.swift:207"""
+        snap = parse_status(
+            "Macrowhisper version: 2.1.1\n"
+            "Recordings watcher: no (folder missing)\n"
+        )
+        self.assertIs(snap.watcher_armed, False)
+
+    def test_unrecognized_watcher_string_becomes_none(self):
+        """Unrecognized watcher string stays None, never guesses."""
+        snap = parse_status(
+            "Macrowhisper version: 2.1.1\n"
+            "Recordings watcher: maybe (some future state)\n"
+        )
+        self.assertIsNone(snap.watcher_armed)
+
+
 if __name__ == "__main__":
     unittest.main()
