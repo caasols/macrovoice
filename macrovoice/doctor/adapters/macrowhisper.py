@@ -57,6 +57,20 @@ class StatusSnapshot:
     sim_esc: Optional[bool] = None
 
 
+@dataclass(frozen=True)
+class ConfigPath:
+    """Where macrowhisper reads its config, and whether that was a deliberate choice.
+
+    `--get-config` prints one of two lines (main.swift:899-906): a persisted path,
+    or the default it fell back to because none was persisted. Both name a real,
+    usable path, but only a PERSISTED one can be the integration-test hijack that
+    doctor's mw.configpath check exists to catch.
+    """
+
+    path: str
+    persisted: bool
+
+
 def yes_no(value: Optional[str]) -> Optional[bool]:
     """"yes"/"no" to a bool, and anything else to None. Never guesses."""
     if value is None:
@@ -146,6 +160,7 @@ DEFAULT_TIMEOUT_S = 10.0
 DEFAULT_LOG_PATH = "~/Library/Logs/Macrowhisper/macrowhisper.log"
 LOG_TAIL_BYTES = 262144
 SAVED_CONFIG_PREFIX = "Saved config path:"
+DEFAULT_CONFIG_PREFIX = "Using default config path:"
 ACCESS_GRANTED = "Accessibility permissions already granted"
 ACCESS_DENIED = "Accessibility permissions were not granted"
 CONFIG_VALID = "Configuration is valid"
@@ -166,7 +181,7 @@ class Macrowhisper:
         self._runner = runner if runner is not None else run_command
         self._log_path = Path(log_path).expanduser()
         self._status = None
-        self._saved_config = _UNSET
+        self._config_path = _UNSET
 
     def _run(self, *args) -> CommandResult:
         return self._runner([self.binary] + list(args), self.timeout)
@@ -177,7 +192,7 @@ class Macrowhisper:
     def invalidate(self) -> None:
         """Drop cached reads. Stage 3's second convergence pass needs this."""
         self._status = None
-        self._saved_config = _UNSET
+        self._config_path = _UNSET
 
     def status(self, refresh: bool = False) -> StatusSnapshot:
         if self._status is None or refresh:
@@ -190,17 +205,30 @@ class Macrowhisper:
                 self._status = parse_status(result.stdout)
         return self._status
 
-    def saved_config_path(self) -> Optional[str]:
-        if self._saved_config is _UNSET:
+    def config_path(self) -> Optional[ConfigPath]:
+        if self._config_path is _UNSET:
             result = self._run("--get-config")
             value = None
             if not result.timed_out and result.returncode is not None:
                 for line in result.stdout.splitlines():
-                    if line.startswith(SAVED_CONFIG_PREFIX):
-                        value = line[len(SAVED_CONFIG_PREFIX):].strip() or None
+                    for prefix, persisted in (
+                        (SAVED_CONFIG_PREFIX, True),
+                        (DEFAULT_CONFIG_PREFIX, False),
+                    ):
+                        if line.startswith(prefix):
+                            text = line[len(prefix):].strip()
+                            if text:
+                                value = ConfigPath(text, persisted)
+                            break
+                    if value is not None:
                         break
-            self._saved_config = value
-        return self._saved_config
+            self._config_path = value
+        return self._config_path
+
+    def saved_config_path(self) -> Optional[str]:
+        """The config path macrowhisper will read, persisted or not."""
+        found = self.config_path()
+        return found.path if found else None
 
     def validate_config(self) -> Tuple[Optional[bool], str]:
         result = self._run("--validate-config")

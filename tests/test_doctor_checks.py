@@ -19,6 +19,8 @@ from macrovoice.doctor.model import Context, Outcome  # noqa: E402
 
 STATUS_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "doctor" / "status"
 
+_MISSING = object()
+
 
 class FakeBridge:
     def __init__(self, **overrides):
@@ -56,6 +58,7 @@ class FakeMacrowhisper:
         self._service = overrides.get("service_installed", True)
         self._config = overrides.get("config", {})
         self._access = overrides.get("accessibility", (True, None))
+        self._config_path = overrides.get("config_path", _MISSING)
 
     def available(self):
         return self._available
@@ -65,6 +68,14 @@ class FakeMacrowhisper:
 
     def saved_config_path(self):
         return self._saved
+
+    def config_path(self):
+        from macrovoice.doctor.adapters.macrowhisper import ConfigPath
+
+        if self._config_path is not _MISSING:
+            return self._config_path
+        # Default: behave like the old saved_config_path override, persisted.
+        return ConfigPath(self._saved, True) if self._saved else None
 
     def validate_config(self):
         return self._valid
@@ -285,6 +296,48 @@ class TestConfigPath(unittest.TestCase):
 
     def test_no_path_at_all_is_unknown(self):
         ctx = context(mw=FakeMacrowhisper(saved_config=None))
+        self.assertIs(registry._check_config_path(ctx).outcome, Outcome.UNKNOWN)
+
+
+class TestConfigPathCheck(unittest.TestCase):
+    def test_a_persisted_temp_path_is_the_hijack_and_is_a_problem(self):
+        from macrovoice.doctor.adapters.macrowhisper import ConfigPath
+
+        ctx = context(mw=FakeMacrowhisper(
+            config_path=ConfigPath("/var/folders/ab/T/tmp123/macrowhisper.json", True)))
+        finding = registry._check_config_path(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("--set-config", finding.fix_hint)
+
+    def test_a_persisted_sane_path_is_ok(self):
+        from macrovoice.doctor.adapters.macrowhisper import ConfigPath
+
+        ctx = context(mw=FakeMacrowhisper(
+            config_path=ConfigPath("/Users/x/.config/macrowhisper/macrowhisper.json", True)))
+        self.assertIs(registry._check_config_path(ctx).outcome, Outcome.OK)
+
+    def test_a_fresh_install_using_the_default_is_ok_not_unknown(self):
+        # The regression test for the audit's HIGH finding: a brand-new
+        # macrowhisper has persisted nothing, and that is a healthy state.
+        from macrovoice.doctor.adapters.macrowhisper import ConfigPath
+
+        ctx = context(mw=FakeMacrowhisper(
+            config_path=ConfigPath("/Users/x/.config/macrowhisper/macrowhisper.json", False)))
+        finding = registry._check_config_path(ctx)
+        self.assertIs(finding.outcome, Outcome.OK)
+        self.assertIn("default", finding.detail)
+
+    def test_a_temp_default_path_is_not_treated_as_the_hijack(self):
+        # Only a PERSISTED path can be the hijack. A default that happens to sit
+        # under a temp root is not something the user chose.
+        from macrovoice.doctor.adapters.macrowhisper import ConfigPath
+
+        ctx = context(mw=FakeMacrowhisper(
+            config_path=ConfigPath("/var/folders/ab/T/tmp123/macrowhisper.json", False)))
+        self.assertIsNot(registry._check_config_path(ctx).outcome, Outcome.PROBLEM)
+
+    def test_no_readable_output_is_unknown(self):
+        ctx = context(mw=FakeMacrowhisper(config_path=None))
         self.assertIs(registry._check_config_path(ctx).outcome, Outcome.UNKNOWN)
 
 

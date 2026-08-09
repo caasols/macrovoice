@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from macrovoice.doctor.adapters.macrowhisper import Macrowhisper  # noqa: E402
+from macrovoice.doctor.adapters.macrowhisper import ConfigPath, Macrowhisper  # noqa: E402
 from macrovoice.doctor.adapters.process import CommandResult  # noqa: E402
 from macrovoice.doctor.adapters.bridge import BridgeState  # noqa: E402
 
@@ -101,6 +101,59 @@ class TestConfigCommands(unittest.TestCase):
 
     def test_read_config_returns_none_on_none_path(self):
         self.assertIsNone(Macrowhisper().read_config(None))
+
+
+class TestConfigPathShapes(unittest.TestCase):
+    """--get-config prints two different lines (main.swift:899-906):
+
+        Saved config path: <path>          when one has been persisted
+        Using default config path: <path>  when none has
+
+    A fresh macrowhisper always prints the second. Reading only the first made
+    six of doctor's twenty checks dead on a brand-new install.
+    """
+
+    def test_a_persisted_path_is_reported_as_persisted(self):
+        runner = FakeRunner(
+            {"--get-config": ok("Saved config path: /Users/x/.config/macrowhisper/macrowhisper.json\n")}
+        )
+        found = Macrowhisper(runner=runner).config_path()
+        self.assertEqual(found.path, "/Users/x/.config/macrowhisper/macrowhisper.json")
+        self.assertTrue(found.persisted)
+
+    def test_a_default_path_is_reported_as_not_persisted(self):
+        runner = FakeRunner(
+            {"--get-config": ok("Using default config path: /Users/x/.config/macrowhisper/macrowhisper.json\n")}
+        )
+        found = Macrowhisper(runner=runner).config_path()
+        self.assertEqual(found.path, "/Users/x/.config/macrowhisper/macrowhisper.json")
+        self.assertFalse(found.persisted)
+
+    def test_unrecognised_output_is_none(self):
+        runner = FakeRunner({"--get-config": ok("something else entirely\n")})
+        self.assertIsNone(Macrowhisper(runner=runner).config_path())
+
+    def test_a_timeout_is_none(self):
+        runner = FakeRunner({"--get-config": CommandResult(None, "", "", True)})
+        self.assertIsNone(Macrowhisper(runner=runner).config_path())
+
+    def test_saved_config_path_still_returns_the_path_for_both_shapes(self):
+        for line in (
+            "Saved config path: /a/b.json\n",
+            "Using default config path: /a/b.json\n",
+        ):
+            runner = FakeRunner({"--get-config": ok(line)})
+            self.assertEqual(Macrowhisper(runner=runner).saved_config_path(), "/a/b.json")
+
+    def test_config_path_is_cached_and_invalidate_clears_it(self):
+        runner = FakeRunner({"--get-config": ok("Saved config path: /a/b.json\n")})
+        mw = Macrowhisper(runner=runner)
+        mw.config_path()
+        mw.config_path()
+        self.assertEqual(len(runner.calls), 1)
+        mw.invalidate()
+        mw.config_path()
+        self.assertEqual(len(runner.calls), 2)
 
 
 class TestAccessibilityLog(unittest.TestCase):

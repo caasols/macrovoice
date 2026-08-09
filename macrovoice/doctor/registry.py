@@ -127,15 +127,25 @@ def _is_temp_path(path):
 
 
 def _check_config_path(ctx):
-    saved = ctx.mw.saved_config_path()
-    if saved is None:
+    """Catch the integration-test hijack: macrowhisper persists whatever --config
+    it was last given, and a temp path left by a test run points the daemon at a
+    directory that no longer exists. Friction trap 2.
+
+    Only a PERSISTED path can be that hijack. A fresh install has persisted
+    nothing and is simply using its default, which is a healthy state, not a
+    fault. Reporting it as unknown made six checks dead on a new machine.
+    """
+    found = ctx.mw.config_path()
+    if found is None:
         return Finding.unknown("could not read macrowhisper --get-config")
-    if _is_temp_path(saved):
+    if found.persisted and _is_temp_path(found.path):
         return Finding.problem(
-            "macrowhisper's saved config path is a temp directory: %s" % saved,
+            "macrowhisper's saved config path is a temp directory: %s" % found.path,
             "macrowhisper --set-config ~/.config/macrowhisper/macrowhisper.json",
         )
-    return Finding.ok(saved)
+    if found.persisted:
+        return Finding.ok("%s (persisted)" % found.path)
+    return Finding.ok("%s (macrowhisper's default, nothing persisted)" % found.path)
 
 
 def _check_config_exists(ctx):
