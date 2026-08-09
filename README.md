@@ -163,6 +163,23 @@ What makes it easy to misdiagnose is that the damage is app-specific. The same d
 perfectly into a browser address bar or a terminal, where Escape is harmless, so it reads as a
 paste bug in one app rather than a global setting doing collateral damage.
 
+## Diagnosing a broken setup
+
+```sh
+./macrovoice.sh doctor --check
+```
+
+Twenty checks across both apps, reported in the order you hit them. It is read-only: it never
+creates a directory, edits a config, or touches VoiceInk.
+
+Three outcomes, and the third one matters. `ok` and `PROBLEM` mean what you expect. `unknown`
+means a check could not be run, and it names what blocked it: if macrowhisper is not running,
+`simEsc` is not fine and not broken, it is unknowable. Fix the problem at the top and re-run.
+That is also why a bare machine reports one real problem and a run of unknowns instead of a wall
+of alarms: everything downstream of the one thing that is actually broken has nothing to inspect.
+
+Exit codes: `0` healthy, `1` a fatal problem remains, `2` a fatal check could not be determined.
+
 ## Options
 
 | Flag | Default | Description |
@@ -286,6 +303,10 @@ resolve at action time.
 | `macrowhisper.sample.json` | Ready-to-use macrowhisper config |
 
 ## Troubleshooting
+
+**Start with `./macrovoice.sh doctor --check`.** Nine of the thirteen setup traps this project
+has hit in practice are detected there, including the three that silently look like the bridge
+being broken.
 
 | Symptom | Cause |
 | --- | --- |
