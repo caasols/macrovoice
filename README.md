@@ -215,7 +215,8 @@ delivered, and a 633-character dictation arrived intact.
 
 ## Tests
 
-171 tests, **99% branch coverage with zero missing statements**. CI runs the suite on macOS
+301 tests: 171 on the delivery path, **99% branch coverage with zero missing statements**, plus
+130 for `doctor` (its coverage has not been separately measured). CI runs the suite on macOS
 across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice.sh` execs
 `/usr/bin/env python3`, and on a stock Mac that is the system Python.
 
@@ -229,9 +230,10 @@ across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice.sh` e
 | `tests/test_integration_safety.py` | 20 | The integration suite's own guard against hijacking your macrowhisper |
 | `tests/test_voiceink_invocation.py` | 8 | The `.sh` wrappers through `/bin/zsh -lc`, exactly as VoiceInk calls them |
 | `tests/test_integration_macrowhisper.py` | 5 | Opt-in; drives a **real macrowhisper daemon** |
+| `tests/test_doctor_*.py` (7 files) | 130 | `doctor`'s checks, adapters, runner, report and status parser, exercised without a real macrowhisper |
 
 ```sh
-python3 -m unittest discover -s tests -t tests -v      # 171 tests, 5 skipped
+python3 -m unittest discover -s tests -t tests -v      # 301 tests, 5 skipped
 MACROVOICE_INTEGRATION=1 python3 -m unittest discover -s tests -t tests
 ```
 
@@ -297,6 +299,7 @@ resolve at action time.
 | `macrovoice/meta.py` | Build and serialize the `meta.json` document (pure) |
 | `macrovoice/publisher.py` | Staging, spool, drain lock, atomic renames |
 | `macrovoice/cli.py` | Wiring, logging, exit-code policy |
+| `macrovoice/doctor/` | Read-only inspection of the whole setup, see [Diagnosing a broken setup](#diagnosing-a-broken-setup) |
 | `test_harness.py` | Port of macrowhisper's own validation gate, used as the test oracle |
 | `macrovoice.sh` | The one-liner you paste into VoiceInk |
 | `probe.sh` | Captures what VoiceInk actually sends |
@@ -320,9 +323,10 @@ being broken.
 | Quotes look backslashed in `fired.log` | Expected. macrowhisper shell-escapes `{{swResult}}` for shell actions. Insert actions are not escaped |
 | Transcript missing entirely | Check `~/mw-bridge/macrovoice.log` and `~/mw-bridge/.spool/`, or force it with `--drain-only` |
 
-`macrowhisper --status` exits 0 even when nothing is running, so do not use it as a liveness
-check in a script. To lower `--gap`, bisect downward and use macrowhisper's own log as the
-oracle:
+`macrowhisper --status`'s **exit code** is useless as a liveness check: it exits 0 either way.
+Its **output** is not: it prints the literal line `macrowhisper is not running.` when nothing is
+listening, which is exactly what `doctor`'s own liveness check reads. To lower `--gap`, bisect
+downward and use macrowhisper's own log as the oracle:
 
 ```sh
 grep -iE "burst protection|older than existing" ~/Library/Logs/Macrowhisper/macrowhisper.log
