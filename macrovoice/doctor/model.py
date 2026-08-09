@@ -31,7 +31,12 @@ class Severity(enum.Enum):
 
 @dataclass(frozen=True)
 class Finding:
-    """What one check observed. `detail` is one line; `fix_hint` is a command."""
+    """What one check observed. `detail` is one line; `fix_hint` is what to do
+    about it, when there is something to do. Usually that is a single
+    runnable command, but not always: some findings have no single command
+    that fixes them, so `fix_hint` is a short instruction or sentence instead.
+    Empty when there is nothing to suggest.
+    """
 
     outcome: Outcome
     detail: str = ""

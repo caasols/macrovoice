@@ -2,16 +2,12 @@
 
 Ordered the way a user meets the traps, which is also roughly dependency order.
 Each entry is data. Adding a trap is one function and one row.
-
-Every trap number below refers to docs/product/2026-08-08-first-run-friction.md.
 """
 
 import os
 import tempfile
-from datetime import datetime, timedelta
 from pathlib import Path
 
-from .adapters.macrowhisper import ACTION_CATEGORIES, _AGE_UNITS
 from .model import Check, Finding, Severity
 
 VOICEINK_APP_PATHS = (
@@ -22,12 +18,10 @@ MIN_PYTHON = (3, 9)
 BREW_INSTALL = "brew install ognistik/formulae/macrowhisper"
 DEFAULT_CLIPBOARD_BUFFER_S = 5.0
 RECOMMENDED_CLIPBOARD_BUFFER_S = 60.0
-# Floor for the accessibility staleness margin, not the whole margin: macrowhisper's
-# own status text truncates the daemon's age to whole reported units ("started 6h
-# ago" means the true age is anywhere in [6h, 7h)), so our derived start time can
-# be off by up to one full reported unit. The margin used at check time is
-# max(this floor, one reported unit) -- see _accessibility_margin_s below.
-ACCESSIBILITY_STALE_MARGIN_FLOOR_S = 60
+# The categories a config file can define an action under. Only consumer is
+# _check_action below (AppConfiguration.swift:957: defaults, inserts, urls,
+# shortcuts, scriptsShell, scriptsAS).
+ACTION_CATEGORIES = ("inserts", "urls", "shortcuts", "scriptsShell", "scriptsAS")
 CONFIG_SURGERY_HINT = (
     "macrowhisper --stop-service, edit %s, macrowhisper --start-service, "
     "then confirm with macrowhisper --status"
@@ -170,23 +164,41 @@ def _check_config_valid(ctx):
 
 
 def _check_watch_match(ctx):
+    """`--status` reports the daemon's live in-memory `defaults.watch`
+    (SocketCommunication.swift:3241 "Superwhisper folder: <path>", read from
+    3254's `defaults.watch`), which is what the running daemon actually
+    believes, not what is on disk. Preferring it here closes friction trap 5:
+    editing the config file while the daemon is running can be silently
+    discarded, so a check that only reads the file can report OK about a path
+    the daemon has already stopped watching. Fall back to the file when the
+    daemon is not running, since this check deliberately does not depend on
+    mw.running.
+    """
+    status = ctx.mw.status()
     saved = ctx.mw.saved_config_path()
-    config = ctx.mw.read_config(saved) if saved else None
-    if config is None:
-        return Finding.unknown("could not read the config file")
-    configured = config.get("defaults", {}).get("watch")
-    if configured is None:
-        return Finding.problem(
-            "defaults.watch is not set in %s" % saved,
-            CONFIG_SURGERY_HINT % saved,
-        )
+    if status.watch_folder is not None:
+        configured = status.watch_folder
+        source = "the running daemon"
+    else:
+        config = ctx.mw.read_config(saved) if saved else None
+        if config is None:
+            return Finding.unknown("could not read the config file")
+        configured = config.get("defaults", {}).get("watch")
+        if configured is None:
+            return Finding.problem(
+                "defaults.watch is not set in %s" % saved,
+                CONFIG_SURGERY_HINT % saved,
+            )
+        source = str(saved)
+
+    hint = CONFIG_SURGERY_HINT % (saved or "the config")
     if Path(configured).expanduser() != ctx.watch_root:
         return Finding.problem(
-            "macrowhisper watches %s but doctor is checking %s"
-            % (configured, ctx.watch_root),
-            CONFIG_SURGERY_HINT % saved,
+            "macrowhisper watches %s (from %s) but doctor is checking %s"
+            % (configured, source, ctx.watch_root),
+            hint,
         )
-    return Finding.ok(configured)
+    return Finding.ok("%s (from %s)" % (configured, source))
 
 
 def _check_service(ctx):
@@ -265,13 +277,22 @@ def _check_simesc(ctx):
 
 
 def _check_moveto(ctx):
+    """moveTo empty and moveTo "(none)" are the same state. `--status` never
+    emits an empty string: SocketCommunication.swift:3259 prints
+    `moveTo.isEmpty ? "(none)" : moveTo`, and AppConfiguration.swift:383 ships
+    `moveTo: ""` as the default, so a stock, never-configured macrowhisper
+    reports "(none)" here. RecordingsFolderWatcher.swift:1254 guards cleanup
+    with `if let path = moveTo, !path.isEmpty`, so both spellings mean no
+    cleanup. _check_action below handles the identical upstream idiom for
+    "Active action"; this mirrors it.
+    """
     status = ctx.mw.status()
     if status.move_to is None:
         return Finding.unknown("macrowhisper --status did not report moveTo")
-    if status.move_to == "":
+    if not status.move_to or status.move_to == "(none)":
         return Finding.problem(
-            "moveTo is empty, so macrowhisper never cleans up and every dictation "
-            "stays on disk as plaintext indefinitely",
+            "moveTo is not set, so macrowhisper never cleans up and every "
+            "dictation stays on disk as plaintext indefinitely",
             CONFIG_SURGERY_HINT % (ctx.mw.saved_config_path() or "the config"),
         )
     return Finding.ok(status.move_to)
@@ -303,7 +324,11 @@ def _check_clipboard_buffer(ctx):
     """Under Superwhisper the recording folder appears when recording STARTS.
     Under this bridge it appears when dictation ENDS, so with the 5s default any
     dictation longer than five seconds loses its pre-recording clipboard
-    entirely (RecordingsFolderWatcher.swift:441-443, ClipboardMonitor.swift:1139-1152)."""
+    entirely (RecordingsFolderWatcher.swift:441-443, ClipboardMonitor.swift:1139-1152).
+
+    Reads the config file, not `--status`: unlike `defaults.watch`, `--status`
+    has no line for `clipboardBuffer`, so there is no live value to prefer here.
+    """
     saved = ctx.mw.saved_config_path()
     config = ctx.mw.read_config(saved) if saved else None
     if config is None:
@@ -330,22 +355,31 @@ def _check_clipboard_buffer(ctx):
     return Finding.ok("%.0fs" % float(value))
 
 
-def _accessibility_margin_s(unit):
-    """The tolerance for comparing the Accessibility grant line's timestamp
-    against the daemon's derived start time. Widened to match the precision
-    macrowhisper actually reported (`unit` is one of "s", "m", "h", "d", or
-    None when unknown), because a fixed slack cannot absorb a whole-unit
-    truncation error."""
-    return max(ACCESSIBILITY_STALE_MARGIN_FLOOR_S, _AGE_UNITS.get(unit, 0))
-
-
 def _check_accessibility(ctx):
-    """Friction trap 4: macrowhisper logs this at startup, in the same instant it
-    raises the prompt, so the line is stale the moment the user clicks Allow.
-    The newest line therefore describes the CURRENT daemon, and a line older
-    than the daemon (beyond the reported precision) means we genuinely do not
-    know."""
-    granted, when = ctx.mw.accessibility_state()
+    """Friction trap 4: macrowhisper checks and logs Accessibility exactly once
+    per process, unconditionally, at true process startup
+    (main.swift:1905 requestAccessibilityPermissionOnStartup(), which logs one
+    of Accessibility.swift:51 or :62), in the same instant it raises the
+    prompt. Because every startup emits exactly one such line, the newest one
+    in the log always describes the currently running process: there is no
+    freshness comparison to make, and there used to be a false one here.
+
+    A previous version of this check compared the grant line's timestamp
+    against a "daemon start time" derived from `--status`'s watcher age
+    (`watcher_started_ago_s`, itself parsed from RecordingsFolderWatcher.swift's
+    watcherStartedAt). That derived time is NOT the process start time and must
+    never be treated as one: main.swift:672-683 registers an
+    NSWorkspace.didWakeNotification observer whose handler calls
+    rearmFilesystemWatchersAfterWake() (main.swift:557-583), which restarts the
+    watcher, and it is also re-armed on a watch-path change or when the
+    recordings folder appears late. Comparing the grant line's timestamp
+    against that derived "start" produced a FAIL-severity UNKNOWN on a
+    healthy machine after every lid-open.
+
+    UNKNOWN is reserved for the one genuinely unresolvable case: no
+    Accessibility line found in the tail at all.
+    """
+    granted, _when = ctx.mw.accessibility_state()
     if granted is None:
         return Finding.unknown("no Accessibility line found in macrowhisper's log")
     if not granted:
@@ -353,20 +387,6 @@ def _check_accessibility(ctx):
             "macrowhisper started without Accessibility permission, so it cannot paste",
             "grant it in System Settings > Privacy & Security > Accessibility, "
             "then macrowhisper --restart-service",
-        )
-    status = ctx.mw.status()
-    started_ago = status.watcher_started_ago_s
-    if when is None or started_ago is None:
-        return Finding.unknown(
-            "macrowhisper's log reports Accessibility as granted, but the daemon's "
-            "start time is unknown, so we cannot confirm the line is fresh"
-        )
-    daemon_started = datetime.now() - timedelta(seconds=started_ago)
-    margin = _accessibility_margin_s(status.watcher_started_ago_unit)
-    if when < daemon_started - timedelta(seconds=margin):
-        return Finding.unknown(
-            "the newest Accessibility line predates the running daemon, so it "
-            "describes a previous one"
         )
     return Finding.ok("granted")
 

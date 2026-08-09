@@ -11,8 +11,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from macrovoice.doctor import registry  # noqa: E402
 from macrovoice.doctor.adapters.bridge import BridgeSnapshot  # noqa: E402
-from macrovoice.doctor.adapters.macrowhisper import StatusSnapshot  # noqa: E402
+from macrovoice.doctor.adapters.macrowhisper import (  # noqa: E402
+    StatusSnapshot,
+    parse_status,
+)
 from macrovoice.doctor.model import Context, Outcome  # noqa: E402
+
+STATUS_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "doctor" / "status"
 
 
 class FakeBridge:
@@ -251,6 +256,20 @@ class TestDangerousSettings(unittest.TestCase):
         finding = registry._check_moveto(context(mw=FakeMacrowhisper(status=status)))
         self.assertIs(finding.outcome, Outcome.PROBLEM)
 
+    def test_moveto_reported_as_none_is_a_problem_not_ok(self):
+        # Regression: --status never emits an empty string. SocketCommunication
+        # .swift:3259 prints moveTo.isEmpty ? "(none)" : moveTo, so a stock,
+        # never-configured macrowhisper reports "(none)" here. Reporting OK on
+        # this is the exact state every new user is in.
+        status = StatusSnapshot(running=True, recognized=True, move_to="(none)")
+        finding = registry._check_moveto(context(mw=FakeMacrowhisper(status=status)))
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+
+    def test_a_real_moveto_value_is_ok(self):
+        status = StatusSnapshot(running=True, recognized=True, move_to=".delete")
+        finding = registry._check_moveto(context(mw=FakeMacrowhisper(status=status)))
+        self.assertIs(finding.outcome, Outcome.OK)
+
 
 class TestConfigPath(unittest.TestCase):
     def test_a_temp_config_path_is_the_hijack_and_is_caught(self):
@@ -280,6 +299,46 @@ class TestWatchMatch(unittest.TestCase):
     def test_match_is_ok(self):
         ctx = context(
             mw=FakeMacrowhisper(config={"defaults": {"watch": "/tmp/w"}}),
+            watch_root="/tmp/w",
+        )
+        self.assertIs(registry._check_watch_match(ctx).outcome, Outcome.OK)
+
+    def test_the_running_daemons_live_value_wins_over_the_file(self):
+        # Friction trap 5: editing the config while the daemon runs can be
+        # silently discarded. --status reports the daemon's actual in-memory
+        # belief, which must win over a file that may no longer be true.
+        status = StatusSnapshot(running=True, recognized=True, watch_folder="/tmp/w")
+        ctx = context(
+            mw=FakeMacrowhisper(
+                status=status, config={"defaults": {"watch": "/somewhere/else"}}
+            ),
+            watch_root="/tmp/w",
+        )
+        finding = registry._check_watch_match(ctx)
+        self.assertIs(finding.outcome, Outcome.OK)
+        self.assertIn("daemon", finding.detail)
+
+    def test_a_mismatch_against_the_live_daemon_value_is_a_problem(self):
+        status = StatusSnapshot(running=True, recognized=True, watch_folder="/somewhere/else")
+        ctx = context(
+            mw=FakeMacrowhisper(
+                status=status, config={"defaults": {"watch": "/tmp/w"}}
+            ),
+            watch_root="/tmp/w",
+        )
+        finding = registry._check_watch_match(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("/somewhere/else", finding.detail)
+
+    def test_falls_back_to_the_file_when_the_daemon_is_not_running(self):
+        # status.watch_folder is only ever set on the running branch of
+        # parse_status, so None here means "daemon down or unreadable",
+        # which is exactly when the file is the only source available.
+        status = StatusSnapshot(running=False, recognized=True)
+        ctx = context(
+            mw=FakeMacrowhisper(
+                status=status, config={"defaults": {"watch": "/tmp/w"}}
+            ),
             watch_root="/tmp/w",
         )
         self.assertIs(registry._check_watch_match(ctx).outcome, Outcome.OK)
@@ -351,96 +410,32 @@ class TestClipboardBuffer(unittest.TestCase):
 
 
 class TestAccessibility(unittest.TestCase):
+    """No freshness comparison: the Accessibility line is logged once,
+    unconditionally, at true process startup (main.swift:1905), so the
+    newest line in the tail always describes the running process. The
+    watcher's arm time is a different thing entirely and re-arms on wake
+    (main.swift:672-683), which is why this check must not compare against
+    it. See the docstring on _check_accessibility for the full history."""
+
     def test_denied_is_a_problem_naming_the_restart(self):
         ctx = context(mw=FakeMacrowhisper(accessibility=(False, datetime(2026, 8, 9, 11, 0, 0))))
         finding = registry._check_accessibility(ctx)
         self.assertIs(finding.outcome, Outcome.PROBLEM)
         self.assertIn("--restart-service", finding.fix_hint)
 
-    def test_granted_recently_is_ok(self):
-        status = StatusSnapshot(
-            running=True, recognized=True, watcher_started_ago_s=600
-        )
-        ctx = context(
-            mw=FakeMacrowhisper(
-                status=status, accessibility=(True, datetime.now() - timedelta(minutes=9))
-            )
-        )
-        self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.OK)
-
-    def test_a_line_older_than_the_daemon_is_unknown_not_ok(self):
-        # Trap 4: the line is logged at startup. If it predates the running
-        # daemon it describes a previous one, so we do not actually know.
-        status = StatusSnapshot(running=True, recognized=True, watcher_started_ago_s=600)
-        ctx = context(
-            mw=FakeMacrowhisper(
-                status=status, accessibility=(True, datetime.now() - timedelta(hours=5))
-            )
-        )
+    def test_no_accessibility_line_is_unknown(self):
+        ctx = context(mw=FakeMacrowhisper(accessibility=(None, None)))
         self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.UNKNOWN)
 
-    def test_unknown_daemon_start_time_is_unknown_never_ok(self):
-        # Without the daemon's start time we cannot tell whether a stale-looking
-        # grant line is fresh. Falling through to OK here would be a false OK on
-        # a FAIL-severity check about whether pasting works at all.
+    def test_granted_is_ok_no_matter_how_old_the_line_is(self):
+        # Regression for the false FAIL-severity UNKNOWN found live: a grant
+        # line logged hours or days ago (the daemon has been up since) must
+        # still read as OK, since it is the only such line the process ever
+        # logs.
         ctx = context(
-            mw=FakeMacrowhisper(
-                accessibility=(True, datetime.now() - timedelta(hours=5))
-            )
-        )
-        self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.UNKNOWN)
-
-    def test_regression_grant_line_within_the_reported_hours_precision_is_ok(self):
-        # Regression for the false UNKNOWN found live: macrowhisper's status
-        # text truncates to whole units ("started 6h ago" means anywhere in
-        # [6h, 7h)), so a grant line 6h30m old with "6h" reported must not be
-        # flagged as predating the daemon.
-        status = StatusSnapshot(
-            running=True,
-            recognized=True,
-            watcher_started_ago_s=6 * 3600,
-            watcher_started_ago_unit="h",
-        )
-        ctx = context(
-            mw=FakeMacrowhisper(
-                status=status,
-                accessibility=(True, datetime.now() - timedelta(hours=6, minutes=30)),
-            )
+            mw=FakeMacrowhisper(accessibility=(True, datetime.now() - timedelta(days=2)))
         )
         self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.OK)
-
-    def test_freshly_restarted_daemon_reporting_just_now_is_ok(self):
-        status = StatusSnapshot(
-            running=True,
-            recognized=True,
-            watcher_started_ago_s=0,
-            watcher_started_ago_unit="s",
-        )
-        ctx = context(
-            mw=FakeMacrowhisper(
-                status=status,
-                accessibility=(True, datetime.now() - timedelta(seconds=2)),
-            )
-        )
-        self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.OK)
-
-    def test_a_line_older_than_the_widened_tolerance_is_still_unknown(self):
-        # The tolerance widens to match reported precision, it does not
-        # disappear: a line genuinely from a previous daemon must still be
-        # reported UNKNOWN, not OK.
-        status = StatusSnapshot(
-            running=True,
-            recognized=True,
-            watcher_started_ago_s=6 * 3600,
-            watcher_started_ago_unit="h",
-        )
-        ctx = context(
-            mw=FakeMacrowhisper(
-                status=status,
-                accessibility=(True, datetime.now() - timedelta(days=2)),
-            )
-        )
-        self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.UNKNOWN)
 
 
 class TestConfigExists(unittest.TestCase):
@@ -545,6 +540,43 @@ class TestFolders(unittest.TestCase):
         status = StatusSnapshot(running=True, recognized=True)
         ctx = context(mw=FakeMacrowhisper(status=status))
         self.assertIs(registry._check_folders(ctx).outcome, Outcome.UNKNOWN)
+
+
+class TestDefaultConfigFixture(unittest.TestCase):
+    """Drives checks through parse_status() on a fixture built from
+    SocketCommunication.swift:3246-3270, representing a stock, never
+    configured daemon. This is the shape of input the real daemon can
+    produce, which a hand-built StatusSnapshot(move_to="") cannot:
+    --status never emits an empty string, only "(none)"
+    (SocketCommunication.swift:3259). That gap between the fixture corpus
+    and the real output is exactly how the C1 false OK on moveTo survived
+    130 tests, so these checks are driven off the parser, never a
+    hand-constructed snapshot.
+    """
+
+    def setUp(self):
+        text = (STATUS_FIXTURES / "default-config.txt").read_text(encoding="utf-8")
+        self.status = parse_status(text)
+
+    def test_the_fixture_parses_as_a_running_recognized_daemon(self):
+        self.assertTrue(self.status.recognized)
+        self.assertTrue(self.status.running)
+
+    def test_moveto_is_a_problem_not_ok(self):
+        ctx = context(mw=FakeMacrowhisper(status=self.status))
+        self.assertIs(registry._check_moveto(ctx).outcome, Outcome.PROBLEM)
+
+    def test_simesc_is_a_problem_not_ok(self):
+        ctx = context(mw=FakeMacrowhisper(status=self.status))
+        self.assertIs(registry._check_simesc(ctx).outcome, Outcome.PROBLEM)
+
+    def test_active_action_is_a_problem_not_ok(self):
+        ctx = context(mw=FakeMacrowhisper(status=self.status))
+        self.assertIs(registry._check_action(ctx).outcome, Outcome.PROBLEM)
+
+    def test_missing_recordings_folder_is_a_problem_not_ok(self):
+        ctx = context(mw=FakeMacrowhisper(status=self.status))
+        self.assertIs(registry._check_folders(ctx).outcome, Outcome.PROBLEM)
 
 
 if __name__ == "__main__":

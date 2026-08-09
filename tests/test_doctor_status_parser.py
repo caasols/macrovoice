@@ -155,7 +155,6 @@ class TestJustNowAge(unittest.TestCase):
             "Recordings watcher: yes (armed, started just now, last event just now, pending 0)\n"
         )
         self.assertEqual(snap.watcher_started_ago_s, 0)
-        self.assertEqual(snap.watcher_started_ago_unit, "s")
 
     def test_never_stays_unparsed(self):
         snap = parse_status(
@@ -163,15 +162,13 @@ class TestJustNowAge(unittest.TestCase):
             "Recordings watcher: yes (armed, started never, last event never, pending 0)\n"
         )
         self.assertIsNone(snap.watcher_started_ago_s)
-        self.assertIsNone(snap.watcher_started_ago_unit)
 
-    def test_reported_unit_is_captured_alongside_the_seconds(self):
+    def test_hour_unit_age_is_parsed_into_seconds(self):
         snap = parse_status(
             "Macrowhisper version: 2.1.1\n"
             "Recordings watcher: yes (armed, started 6h ago, last event 6h ago, pending 0)\n"
         )
         self.assertEqual(snap.watcher_started_ago_s, 6 * 3600)
-        self.assertEqual(snap.watcher_started_ago_unit, "h")
 
 
 if __name__ == "__main__":

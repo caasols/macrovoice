@@ -307,7 +307,7 @@ resolve at action time.
 
 ## Troubleshooting
 
-**Start with `./macrovoice.sh doctor --check`.** Nine of the thirteen setup traps this project
+**Start with `./macrovoice.sh doctor --check`.** Seven of the thirteen setup traps this project
 has hit in practice are detected there, including the three that silently look like the bridge
 being broken.
 

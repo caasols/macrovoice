@@ -52,7 +52,6 @@ class StatusSnapshot:
     watcher_armed: Optional[bool] = None
     watcher_pending: Optional[int] = None
     watcher_started_ago_s: Optional[int] = None
-    watcher_started_ago_unit: Optional[str] = None
     active_action: Optional[str] = None
     move_to: Optional[str] = None
     sim_esc: Optional[bool] = None
@@ -137,9 +136,6 @@ def parse_status(text: str) -> StatusSnapshot:
             if age
             else (0 if just_now else None)
         ),
-        watcher_started_ago_unit=(
-            age.group(2) if age else ("s" if just_now else None)
-        ),
         active_action=fields.get("Active action"),
         move_to=fields.get("moveTo"),
         sim_esc=yes_no(fields.get("simEsc")),
@@ -153,7 +149,6 @@ SAVED_CONFIG_PREFIX = "Saved config path:"
 ACCESS_GRANTED = "Accessibility permissions already granted"
 ACCESS_DENIED = "Accessibility permissions were not granted"
 CONFIG_VALID = "Configuration is valid"
-ACTION_CATEGORIES = ("inserts", "urls", "shortcuts", "scriptsShell", "scriptsAS")
 
 _LOG_STAMP = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]")
 
