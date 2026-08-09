@@ -20,7 +20,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Optional, Tuple
 
 from .process import CommandResult, run_command
 
@@ -212,6 +212,8 @@ class Macrowhisper:
         return None
 
     def read_config(self, path) -> Optional[dict]:
+        if path is None:
+            return None
         try:
             text = Path(path).expanduser().read_text(encoding="utf-8")
             document = json.loads(text)

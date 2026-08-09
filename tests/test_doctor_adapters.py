@@ -97,6 +97,9 @@ class TestConfigCommands(unittest.TestCase):
             path.write_text("{ not json", encoding="utf-8")
             self.assertIsNone(Macrowhisper().read_config(str(path)))
 
+    def test_read_config_returns_none_on_none_path(self):
+        self.assertIsNone(Macrowhisper().read_config(None))
+
 
 class TestAccessibilityLog(unittest.TestCase):
     """The line is emitted at daemon STARTUP (friction trap 4), so the newest
