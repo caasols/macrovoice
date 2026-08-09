@@ -86,6 +86,14 @@ def _parse_args(argv):
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "doctor":
+        # Lazy import: a dictation must never load doctor's code. Everything
+        # below this line is the delivery path and is unchanged, including the
+        # always-exit-0 policy in this module's docstring. doctor deliberately
+        # does NOT exit 0, because a check that cannot fail is useless.
+        from .doctor import doctor_main
+
+        return doctor_main(argv[1:])
     args = _parse_args(argv)
     watch_root = Path(args.watch).expanduser()
 
