@@ -309,7 +309,8 @@ class TestBridgeState(unittest.TestCase):
 class TestAdapterDegradation(unittest.TestCase):
     """Every command promises the same thing: a timeout or an unrunnable binary
     becomes an UNKNOWN-shaped result, never a hang and never a guess. Only
-    status() had that test."""
+    status() and config_path() had that test; this closes it for
+    validate_config() and service_installed() too."""
 
     def timing_out(self, flag):
         return FakeRunner({flag: CommandResult(None, "", "", True)})
@@ -322,9 +323,6 @@ class TestAdapterDegradation(unittest.TestCase):
         self.assertIsNone(
             Macrowhisper(runner=self.timing_out("--service-status")).service_installed()
         )
-
-    def test_config_path_degrades(self):
-        self.assertIsNone(Macrowhisper(runner=self.timing_out("--get-config")).config_path())
 
     def test_service_installed_is_none_when_the_line_is_absent(self):
         runner = FakeRunner({"--service-status": ok("Service Status:\n  Running: Yes\n")})
