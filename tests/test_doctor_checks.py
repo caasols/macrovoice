@@ -197,5 +197,164 @@ class TestTableIntegrity(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)))
 
 
+from datetime import datetime, timedelta  # noqa: E402
+
+
+class TestMacrowhisperRuntime(unittest.TestCase):
+    def test_not_running_is_a_problem_with_the_start_command(self):
+        ctx = context(
+            mw=FakeMacrowhisper(status=StatusSnapshot(running=False, recognized=True))
+        )
+        finding = registry._check_running(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("--start-service", finding.fix_hint)
+
+    def test_unrecognised_output_is_unknown_not_a_failure(self):
+        ctx = context(
+            mw=FakeMacrowhisper(status=StatusSnapshot(running=False, recognized=False))
+        )
+        self.assertIs(registry._check_running(ctx).outcome, Outcome.UNKNOWN)
+
+    def test_unarmed_watcher_names_the_startup_race(self):
+        status = StatusSnapshot(
+            running=True, recognized=True, watcher_present=True, watcher_armed=False
+        )
+        finding = registry._check_armed(context(mw=FakeMacrowhisper(status=status)))
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+
+
+class TestDangerousSettings(unittest.TestCase):
+    def test_simesc_on_is_a_problem_and_says_it_destroys_work(self):
+        status = StatusSnapshot(running=True, recognized=True, sim_esc=True)
+        finding = registry._check_simesc(context(mw=FakeMacrowhisper(status=status)))
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("Escape", finding.detail)
+
+    def test_simesc_off_is_ok(self):
+        status = StatusSnapshot(running=True, recognized=True, sim_esc=False)
+        self.assertIs(
+            registry._check_simesc(context(mw=FakeMacrowhisper(status=status))).outcome,
+            Outcome.OK,
+        )
+
+    def test_simesc_absent_from_the_output_is_unknown_never_ok(self):
+        # This is the whole reason the parser is tolerant. Reporting OK here
+        # would tell the user their work is safe when we do not know.
+        status = StatusSnapshot(running=True, recognized=True, sim_esc=None)
+        self.assertIs(
+            registry._check_simesc(context(mw=FakeMacrowhisper(status=status))).outcome,
+            Outcome.UNKNOWN,
+        )
+
+    def test_empty_moveto_is_a_problem_about_plaintext_accumulating(self):
+        status = StatusSnapshot(running=True, recognized=True, move_to="")
+        finding = registry._check_moveto(context(mw=FakeMacrowhisper(status=status)))
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+
+
+class TestConfigPath(unittest.TestCase):
+    def test_a_temp_config_path_is_the_hijack_and_is_caught(self):
+        ctx = context(
+            mw=FakeMacrowhisper(saved_config="/var/folders/ab/T/tmp123/macrowhisper.json")
+        )
+        finding = registry._check_config_path(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("--set-config", finding.fix_hint)
+
+    def test_a_normal_path_is_ok(self):
+        self.assertIs(registry._check_config_path(context()).outcome, Outcome.OK)
+
+    def test_no_path_at_all_is_unknown(self):
+        ctx = context(mw=FakeMacrowhisper(saved_config=None))
+        self.assertIs(registry._check_config_path(ctx).outcome, Outcome.UNKNOWN)
+
+
+class TestWatchMatch(unittest.TestCase):
+    def test_mismatch_is_a_problem(self):
+        ctx = context(
+            mw=FakeMacrowhisper(config={"defaults": {"watch": "/somewhere/else"}}),
+            watch_root="/tmp/w",
+        )
+        self.assertIs(registry._check_watch_match(ctx).outcome, Outcome.PROBLEM)
+
+    def test_match_is_ok(self):
+        ctx = context(
+            mw=FakeMacrowhisper(config={"defaults": {"watch": "/tmp/w"}}),
+            watch_root="/tmp/w",
+        )
+        self.assertIs(registry._check_watch_match(ctx).outcome, Outcome.OK)
+
+
+class TestActiveAction(unittest.TestCase):
+    def test_an_action_that_is_not_defined_is_a_problem(self):
+        status = StatusSnapshot(running=True, recognized=True, active_action="ghost")
+        ctx = context(
+            mw=FakeMacrowhisper(status=status, config={"inserts": {"autoPaste": {}}})
+        )
+        self.assertIs(registry._check_action(ctx).outcome, Outcome.PROBLEM)
+
+    def test_a_defined_action_is_ok(self):
+        status = StatusSnapshot(running=True, recognized=True, active_action="autoPaste")
+        ctx = context(
+            mw=FakeMacrowhisper(status=status, config={"inserts": {"autoPaste": {}}})
+        )
+        self.assertIs(registry._check_action(ctx).outcome, Outcome.OK)
+
+
+class TestMultipleDependencies(unittest.TestCase):
+    def test_the_first_declared_blocker_wins_when_both_dependencies_fail(self):
+        # mw.action is the first check with more than one dependency
+        # (mw.running, mw.configexists). With macrowhisper unavailable, both
+        # dependencies end up not-OK; the runner must report the first one in
+        # declaration order as the blocker, not the second.
+        from macrovoice.doctor.runner import run
+
+        ctx = context(mw=FakeMacrowhisper(available=False))
+        results = run(registry.CHECKS, ctx)
+        findings = {result.check.id: result.finding for result in results}
+        self.assertIs(findings["mw.action"].outcome, Outcome.UNKNOWN)
+        self.assertEqual(findings["mw.action"].blocked_by, "mw.running")
+
+
+class TestClipboardBuffer(unittest.TestCase):
+    def test_the_default_five_seconds_is_a_warning(self):
+        ctx = context(mw=FakeMacrowhisper(config={"defaults": {"clipboardBuffer": 5.0}}))
+        self.assertIs(registry._check_clipboard_buffer(ctx).outcome, Outcome.PROBLEM)
+
+    def test_sixty_is_ok(self):
+        ctx = context(mw=FakeMacrowhisper(config={"defaults": {"clipboardBuffer": 60.0}}))
+        self.assertIs(registry._check_clipboard_buffer(ctx).outcome, Outcome.OK)
+
+
+class TestAccessibility(unittest.TestCase):
+    def test_denied_is_a_problem_naming_the_restart(self):
+        ctx = context(mw=FakeMacrowhisper(accessibility=(False, datetime(2026, 8, 9, 11, 0, 0))))
+        finding = registry._check_accessibility(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("--restart-service", finding.fix_hint)
+
+    def test_granted_recently_is_ok(self):
+        status = StatusSnapshot(
+            running=True, recognized=True, watcher_started_ago_s=600
+        )
+        ctx = context(
+            mw=FakeMacrowhisper(
+                status=status, accessibility=(True, datetime.now() - timedelta(minutes=9))
+            )
+        )
+        self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.OK)
+
+    def test_a_line_older_than_the_daemon_is_unknown_not_ok(self):
+        # Trap 4: the line is logged at startup. If it predates the running
+        # daemon it describes a previous one, so we do not actually know.
+        status = StatusSnapshot(running=True, recognized=True, watcher_started_ago_s=600)
+        ctx = context(
+            mw=FakeMacrowhisper(
+                status=status, accessibility=(True, datetime.now() - timedelta(hours=5))
+            )
+        )
+        self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.UNKNOWN)
+
+
 if __name__ == "__main__":
     unittest.main()
