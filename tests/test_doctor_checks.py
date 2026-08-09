@@ -390,6 +390,58 @@ class TestAccessibility(unittest.TestCase):
         )
         self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.UNKNOWN)
 
+    def test_regression_grant_line_within_the_reported_hours_precision_is_ok(self):
+        # Regression for the false UNKNOWN found live: macrowhisper's status
+        # text truncates to whole units ("started 6h ago" means anywhere in
+        # [6h, 7h)), so a grant line 6h30m old with "6h" reported must not be
+        # flagged as predating the daemon.
+        status = StatusSnapshot(
+            running=True,
+            recognized=True,
+            watcher_started_ago_s=6 * 3600,
+            watcher_started_ago_unit="h",
+        )
+        ctx = context(
+            mw=FakeMacrowhisper(
+                status=status,
+                accessibility=(True, datetime.now() - timedelta(hours=6, minutes=30)),
+            )
+        )
+        self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.OK)
+
+    def test_freshly_restarted_daemon_reporting_just_now_is_ok(self):
+        status = StatusSnapshot(
+            running=True,
+            recognized=True,
+            watcher_started_ago_s=0,
+            watcher_started_ago_unit="s",
+        )
+        ctx = context(
+            mw=FakeMacrowhisper(
+                status=status,
+                accessibility=(True, datetime.now() - timedelta(seconds=2)),
+            )
+        )
+        self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.OK)
+
+    def test_a_line_older_than_the_widened_tolerance_is_still_unknown(self):
+        # The tolerance widens to match reported precision, it does not
+        # disappear: a line genuinely from a previous daemon must still be
+        # reported UNKNOWN, not OK.
+        status = StatusSnapshot(
+            running=True,
+            recognized=True,
+            watcher_started_ago_s=6 * 3600,
+            watcher_started_ago_unit="h",
+        )
+        ctx = context(
+            mw=FakeMacrowhisper(
+                status=status,
+                accessibility=(True, datetime.now() - timedelta(days=2)),
+            )
+        )
+        self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.UNKNOWN)
+
 
 class TestConfigExists(unittest.TestCase):
     def test_missing_config_names_a_copy_command_from_the_repo_sample(self):

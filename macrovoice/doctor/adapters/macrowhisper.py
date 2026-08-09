@@ -28,6 +28,7 @@ NOT_RUNNING_SENTINEL = "macrowhisper is not running."
 VERSION_KEY = "Macrowhisper version"
 
 _AGE = re.compile(r"started\s+(\d+)\s*([smhd])\s+ago")
+_AGE_JUST_NOW = re.compile(r"started\s+just\s+now")
 _PENDING = re.compile(r"pending\s+(\d+)")
 _EXISTS = re.compile(r"\(exists:\s*(yes|no)\)")
 _WATCHER_ARMED = re.compile(r"^(yes|no)\b")
@@ -51,6 +52,7 @@ class StatusSnapshot:
     watcher_armed: Optional[bool] = None
     watcher_pending: Optional[int] = None
     watcher_started_ago_s: Optional[int] = None
+    watcher_started_ago_unit: Optional[str] = None
     active_action: Optional[str] = None
     move_to: Optional[str] = None
     sim_esc: Optional[bool] = None
@@ -104,6 +106,11 @@ def parse_status(text: str) -> StatusSnapshot:
     watcher = fields.get("Recordings watcher", "")
     pending = _PENDING.search(watcher)
     age = _AGE.search(watcher)
+    # describeStatusAge (RecordingsFolderWatcher.swift:226-243) reports ages
+    # under 5 seconds as "just now": no digits, no unit, no "ago" suffix. The
+    # digit-based _AGE regex cannot match that, so it needs its own case.
+    # "never" (no start recorded) intentionally matches neither and stays None.
+    just_now = _AGE_JUST_NOW.search(watcher) if not age else None
 
     recordings = fields.get("Recordings folder")
     exists = None
@@ -126,7 +133,12 @@ def parse_status(text: str) -> StatusSnapshot:
         watcher_armed=_parse_watcher_armed(watcher),
         watcher_pending=int(pending.group(1)) if pending else None,
         watcher_started_ago_s=(
-            int(age.group(1)) * _AGE_UNITS[age.group(2)] if age else None
+            int(age.group(1)) * _AGE_UNITS[age.group(2)]
+            if age
+            else (0 if just_now else None)
+        ),
+        watcher_started_ago_unit=(
+            age.group(2) if age else ("s" if just_now else None)
         ),
         active_action=fields.get("Active action"),
         move_to=fields.get("moveTo"),

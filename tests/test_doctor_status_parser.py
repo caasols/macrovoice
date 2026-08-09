@@ -144,5 +144,35 @@ class TestWatcherArmedParsing(unittest.TestCase):
         self.assertIsNone(snap.watcher_armed)
 
 
+class TestJustNowAge(unittest.TestCase):
+    """describeStatusAge (RecordingsFolderWatcher.swift:226-243) reports ages
+    under 5 seconds as "just now", with no digits and no "ago" suffix. The age
+    regex alone does not match that, so it needs its own handling."""
+
+    def test_started_just_now_is_zero_seconds_not_none(self):
+        snap = parse_status(
+            "Macrowhisper version: 2.1.1\n"
+            "Recordings watcher: yes (armed, started just now, last event just now, pending 0)\n"
+        )
+        self.assertEqual(snap.watcher_started_ago_s, 0)
+        self.assertEqual(snap.watcher_started_ago_unit, "s")
+
+    def test_never_stays_unparsed(self):
+        snap = parse_status(
+            "Macrowhisper version: 2.1.1\n"
+            "Recordings watcher: yes (armed, started never, last event never, pending 0)\n"
+        )
+        self.assertIsNone(snap.watcher_started_ago_s)
+        self.assertIsNone(snap.watcher_started_ago_unit)
+
+    def test_reported_unit_is_captured_alongside_the_seconds(self):
+        snap = parse_status(
+            "Macrowhisper version: 2.1.1\n"
+            "Recordings watcher: yes (armed, started 6h ago, last event 6h ago, pending 0)\n"
+        )
+        self.assertEqual(snap.watcher_started_ago_s, 6 * 3600)
+        self.assertEqual(snap.watcher_started_ago_unit, "h")
+
+
 if __name__ == "__main__":
     unittest.main()

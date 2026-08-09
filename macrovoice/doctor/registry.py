@@ -11,7 +11,7 @@ import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .adapters.macrowhisper import ACTION_CATEGORIES
+from .adapters.macrowhisper import ACTION_CATEGORIES, _AGE_UNITS
 from .model import Check, Finding, Severity
 
 VOICEINK_APP_PATHS = (
@@ -22,7 +22,12 @@ MIN_PYTHON = (3, 9)
 BREW_INSTALL = "brew install ognistik/formulae/macrowhisper"
 DEFAULT_CLIPBOARD_BUFFER_S = 5.0
 RECOMMENDED_CLIPBOARD_BUFFER_S = 60.0
-ACCESSIBILITY_STALE_MARGIN_S = 60
+# Floor for the accessibility staleness margin, not the whole margin: macrowhisper's
+# own status text truncates the daemon's age to whole reported units ("started 6h
+# ago" means the true age is anywhere in [6h, 7h)), so our derived start time can
+# be off by up to one full reported unit. The margin used at check time is
+# max(this floor, one reported unit) -- see _accessibility_margin_s below.
+ACCESSIBILITY_STALE_MARGIN_FLOOR_S = 60
 CONFIG_SURGERY_HINT = (
     "macrowhisper --stop-service, edit %s, macrowhisper --start-service, "
     "then confirm with macrowhisper --status"
@@ -325,11 +330,21 @@ def _check_clipboard_buffer(ctx):
     return Finding.ok("%.0fs" % float(value))
 
 
+def _accessibility_margin_s(unit):
+    """The tolerance for comparing the Accessibility grant line's timestamp
+    against the daemon's derived start time. Widened to match the precision
+    macrowhisper actually reported (`unit` is one of "s", "m", "h", "d", or
+    None when unknown), because a fixed slack cannot absorb a whole-unit
+    truncation error."""
+    return max(ACCESSIBILITY_STALE_MARGIN_FLOOR_S, _AGE_UNITS.get(unit, 0))
+
+
 def _check_accessibility(ctx):
     """Friction trap 4: macrowhisper logs this at startup, in the same instant it
     raises the prompt, so the line is stale the moment the user clicks Allow.
     The newest line therefore describes the CURRENT daemon, and a line older
-    than the daemon means we genuinely do not know."""
+    than the daemon (beyond the reported precision) means we genuinely do not
+    know."""
     granted, when = ctx.mw.accessibility_state()
     if granted is None:
         return Finding.unknown("no Accessibility line found in macrowhisper's log")
@@ -339,14 +354,16 @@ def _check_accessibility(ctx):
             "grant it in System Settings > Privacy & Security > Accessibility, "
             "then macrowhisper --restart-service",
         )
-    started_ago = ctx.mw.status().watcher_started_ago_s
+    status = ctx.mw.status()
+    started_ago = status.watcher_started_ago_s
     if when is None or started_ago is None:
         return Finding.unknown(
             "macrowhisper's log reports Accessibility as granted, but the daemon's "
             "start time is unknown, so we cannot confirm the line is fresh"
         )
     daemon_started = datetime.now() - timedelta(seconds=started_ago)
-    if when < daemon_started - timedelta(seconds=ACCESSIBILITY_STALE_MARGIN_S):
+    margin = _accessibility_margin_s(status.watcher_started_ago_unit)
+    if when < daemon_started - timedelta(seconds=margin):
         return Finding.unknown(
             "the newest Accessibility line predates the running daemon, so it "
             "describes a previous one"
