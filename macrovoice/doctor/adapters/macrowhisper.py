@@ -14,9 +14,15 @@ we must never have is doctor reporting simEsc as safe because a line was
 reworded upstream.
 """
 
+import json
 import re
+import shutil
 from dataclasses import dataclass
-from typing import Optional
+from datetime import datetime
+from pathlib import Path
+from typing import Callable, List, Optional, Tuple
+
+from .process import CommandResult, run_command
 
 NOT_RUNNING_SENTINEL = "macrowhisper is not running."
 VERSION_KEY = "Macrowhisper version"
@@ -126,3 +132,132 @@ def parse_status(text: str) -> StatusSnapshot:
         move_to=fields.get("moveTo"),
         sim_esc=yes_no(fields.get("simEsc")),
     )
+
+
+DEFAULT_TIMEOUT_S = 10.0
+DEFAULT_LOG_PATH = "~/Library/Logs/Macrowhisper/macrowhisper.log"
+LOG_TAIL_BYTES = 262144
+SAVED_CONFIG_PREFIX = "Saved config path:"
+ACCESS_GRANTED = "Accessibility permissions already granted"
+ACCESS_DENIED = "Accessibility permissions were not granted"
+CONFIG_VALID = "Configuration is valid"
+ACTION_CATEGORIES = ("inserts", "urls", "shortcuts", "scriptsShell", "scriptsAS")
+
+_LOG_STAMP = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]")
+
+
+class Macrowhisper:
+    """Read-only view of a macrowhisper install. Stage 1 never mutates anything.
+
+    `runner` is injectable so the whole class is testable without a daemon.
+    """
+
+    def __init__(self, binary="macrowhisper", timeout=DEFAULT_TIMEOUT_S, runner=None,
+                 log_path=DEFAULT_LOG_PATH):
+        self.binary = binary
+        self.timeout = timeout
+        self._runner = runner if runner is not None else run_command
+        self._log_path = Path(log_path).expanduser()
+        self._status = None
+        self._saved_config = _UNSET
+
+    def _run(self, *args) -> CommandResult:
+        return self._runner([self.binary] + list(args), self.timeout)
+
+    def available(self) -> bool:
+        return shutil.which(self.binary) is not None
+
+    def invalidate(self) -> None:
+        """Drop cached reads. Stage 3's second convergence pass needs this."""
+        self._status = None
+        self._saved_config = _UNSET
+
+    def status(self, refresh: bool = False) -> StatusSnapshot:
+        if self._status is None or refresh:
+            result = self._run("--status")
+            if result.timed_out or result.returncode is None:
+                self._status = StatusSnapshot(
+                    running=False, recognized=False, raw=result.stderr
+                )
+            else:
+                self._status = parse_status(result.stdout)
+        return self._status
+
+    def saved_config_path(self) -> Optional[str]:
+        if self._saved_config is _UNSET:
+            result = self._run("--get-config")
+            value = None
+            if not result.timed_out and result.returncode is not None:
+                for line in result.stdout.splitlines():
+                    if line.startswith(SAVED_CONFIG_PREFIX):
+                        value = line[len(SAVED_CONFIG_PREFIX):].strip() or None
+                        break
+            self._saved_config = value
+        return self._saved_config
+
+    def validate_config(self) -> Tuple[Optional[bool], str]:
+        result = self._run("--validate-config")
+        if result.timed_out or result.returncode is None:
+            return None, result.stderr
+        return CONFIG_VALID in result.stdout, result.stdout.strip()
+
+    def service_installed(self) -> Optional[bool]:
+        result = self._run("--service-status")
+        if result.timed_out or result.returncode is None:
+            return None
+        for line in result.stdout.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("Installed:"):
+                return yes_no(stripped.partition(":")[2])
+        return None
+
+    def read_config(self, path) -> Optional[dict]:
+        try:
+            text = Path(path).expanduser().read_text(encoding="utf-8")
+            document = json.loads(text)
+        except (OSError, ValueError):
+            return None
+        return document if isinstance(document, dict) else None
+
+    def accessibility_state(self) -> Tuple[Optional[bool], Optional[datetime]]:
+        """(granted, when) from the NEWEST Accessibility line, else (None, None).
+
+        macrowhisper checks and logs this at startup, in the same instant it
+        raises the permission prompt, so the line is stale the moment the user
+        clicks Allow and stays stale until the daemon restarts (friction trap
+        4). That is exactly why the newest line describes the CURRENT daemon,
+        and why a caller must compare it against the daemon's start rather than
+        reading it as live state.
+        """
+        try:
+            with open(self._log_path, "rb") as handle:
+                handle.seek(0, 2)
+                size = handle.tell()
+                handle.seek(max(0, size - LOG_TAIL_BYTES))
+                tail = handle.read().decode("utf-8", errors="replace")
+        except OSError:
+            return None, None
+
+        for line in reversed(tail.splitlines()):
+            if ACCESS_GRANTED in line:
+                return True, _log_time(line)
+            if ACCESS_DENIED in line:
+                return False, _log_time(line)
+        return None, None
+
+
+class _Unset:
+    pass
+
+
+_UNSET = _Unset()
+
+
+def _log_time(line: str) -> Optional[datetime]:
+    found = _LOG_STAMP.match(line)
+    if not found:
+        return None
+    try:
+        return datetime.strptime(found.group(1), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
