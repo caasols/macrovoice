@@ -300,6 +300,16 @@ class TestActiveAction(unittest.TestCase):
         )
         self.assertIs(registry._check_action(ctx).outcome, Outcome.OK)
 
+    def test_a_malformed_category_does_not_false_positive_on_substring_match(self):
+        # A category is supposed to be a mapping of action name to config. If it
+        # is a string instead, "in" does substring matching: "co" in "corrupted"
+        # is True. That must not read as the action being defined.
+        status = StatusSnapshot(running=True, recognized=True, active_action="co")
+        ctx = context(
+            mw=FakeMacrowhisper(status=status, config={"inserts": "corrupted"})
+        )
+        self.assertIsNot(registry._check_action(ctx).outcome, Outcome.OK)
+
 
 class TestMultipleDependencies(unittest.TestCase):
     def test_the_first_declared_blocker_wins_when_both_dependencies_fail(self):
@@ -324,6 +334,20 @@ class TestClipboardBuffer(unittest.TestCase):
     def test_sixty_is_ok(self):
         ctx = context(mw=FakeMacrowhisper(config={"defaults": {"clipboardBuffer": 60.0}}))
         self.assertIs(registry._check_clipboard_buffer(ctx).outcome, Outcome.OK)
+
+    def test_a_non_numeric_value_is_a_problem_not_a_crash(self):
+        # float("not-a-number") raises. That must surface as domain-shaped
+        # copy, not the runner's generic "check raised" fallback.
+        ctx = context(
+            mw=FakeMacrowhisper(config={"defaults": {"clipboardBuffer": "lots"}})
+        )
+        finding = registry._check_clipboard_buffer(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("lots", finding.detail)
+
+    def test_a_boolean_value_does_not_silently_convert_to_a_number(self):
+        ctx = context(mw=FakeMacrowhisper(config={"defaults": {"clipboardBuffer": True}}))
+        self.assertIsNot(registry._check_clipboard_buffer(ctx).outcome, Outcome.OK)
 
 
 class TestAccessibility(unittest.TestCase):
@@ -354,6 +378,121 @@ class TestAccessibility(unittest.TestCase):
             )
         )
         self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.UNKNOWN)
+
+    def test_unknown_daemon_start_time_is_unknown_never_ok(self):
+        # Without the daemon's start time we cannot tell whether a stale-looking
+        # grant line is fresh. Falling through to OK here would be a false OK on
+        # a FAIL-severity check about whether pasting works at all.
+        ctx = context(
+            mw=FakeMacrowhisper(
+                accessibility=(True, datetime.now() - timedelta(hours=5))
+            )
+        )
+        self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.UNKNOWN)
+
+
+class TestConfigExists(unittest.TestCase):
+    def test_missing_config_names_a_copy_command_from_the_repo_sample(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            saved = str(Path(tmpdir) / "does-not-exist" / "macrowhisper.json")
+            script = Path(tmpdir) / "macrovoice.sh"
+            ctx = context(
+                mw=FakeMacrowhisper(saved_config=saved),
+                bridge=FakeBridge(script=script),
+            )
+            finding = registry._check_config_exists(ctx)
+            self.assertIs(finding.outcome, Outcome.PROBLEM)
+            self.assertIn(saved, finding.fix_hint)
+            self.assertIn(str(script.parent / "macrovoice.sample.json"), finding.fix_hint)
+
+    def test_existing_config_is_ok(self):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as f:
+            saved = f.name
+        try:
+            ctx = context(mw=FakeMacrowhisper(saved_config=saved))
+            self.assertIs(registry._check_config_exists(ctx).outcome, Outcome.OK)
+        finally:
+            os.unlink(saved)
+
+    def test_no_saved_path_is_unknown(self):
+        ctx = context(mw=FakeMacrowhisper(saved_config=None))
+        self.assertIs(registry._check_config_exists(ctx).outcome, Outcome.UNKNOWN)
+
+
+class TestConfigValid(unittest.TestCase):
+    def test_invalid_config_names_the_validate_command(self):
+        ctx = context(
+            mw=FakeMacrowhisper(validate=(False, "line one issue\nline two issue"))
+        )
+        finding = registry._check_config_valid(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("line one issue", finding.detail)
+        self.assertIn("--validate-config", finding.fix_hint)
+
+    def test_valid_config_is_ok(self):
+        ctx = context(mw=FakeMacrowhisper(validate=(True, "Configuration is valid")))
+        self.assertIs(registry._check_config_valid(ctx).outcome, Outcome.OK)
+
+    def test_could_not_run_validate_is_unknown(self):
+        ctx = context(mw=FakeMacrowhisper(validate=(None, "")))
+        self.assertIs(registry._check_config_valid(ctx).outcome, Outcome.UNKNOWN)
+
+
+class TestServiceInstalled(unittest.TestCase):
+    def test_not_installed_names_the_install_command(self):
+        ctx = context(mw=FakeMacrowhisper(service_installed=False))
+        finding = registry._check_service(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("--install-service", finding.fix_hint)
+
+    def test_installed_is_ok(self):
+        ctx = context(mw=FakeMacrowhisper(service_installed=True))
+        self.assertIs(registry._check_service(ctx).outcome, Outcome.OK)
+
+    def test_could_not_run_service_status_is_unknown(self):
+        ctx = context(mw=FakeMacrowhisper(service_installed=None))
+        self.assertIs(registry._check_service(ctx).outcome, Outcome.UNKNOWN)
+
+
+class TestFolders(unittest.TestCase):
+    def test_missing_folder_with_a_known_path_names_mkdir(self):
+        status = StatusSnapshot(
+            running=True,
+            recognized=True,
+            recordings_folder="/tmp/w/recordings",
+            recordings_folder_exists=False,
+        )
+        ctx = context(mw=FakeMacrowhisper(status=status))
+        finding = registry._check_folders(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertEqual(finding.fix_hint, "mkdir -p /tmp/w/recordings")
+
+    def test_missing_folder_with_no_reported_path_has_no_dangling_mkdir(self):
+        status = StatusSnapshot(
+            running=True,
+            recognized=True,
+            recordings_folder="",
+            recordings_folder_exists=False,
+        )
+        ctx = context(mw=FakeMacrowhisper(status=status))
+        finding = registry._check_folders(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertEqual(finding.fix_hint, "")
+
+    def test_folder_present_is_ok(self):
+        status = StatusSnapshot(
+            running=True,
+            recognized=True,
+            recordings_folder="/tmp/w/recordings",
+            recordings_folder_exists=True,
+        )
+        ctx = context(mw=FakeMacrowhisper(status=status))
+        self.assertIs(registry._check_folders(ctx).outcome, Outcome.OK)
+
+    def test_status_silent_on_the_folder_is_unknown(self):
+        status = StatusSnapshot(running=True, recognized=True)
+        ctx = context(mw=FakeMacrowhisper(status=status))
+        self.assertIs(registry._check_folders(ctx).outcome, Outcome.UNKNOWN)
 
 
 if __name__ == "__main__":

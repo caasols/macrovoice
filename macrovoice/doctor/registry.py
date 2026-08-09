@@ -144,9 +144,10 @@ def _check_config_exists(ctx):
     if saved is None:
         return Finding.unknown("no saved config path")
     if not Path(saved).expanduser().is_file():
+        sample = ctx.bridge.script_path().parent / "macrovoice.sample.json"
         return Finding.problem(
             "%s does not exist" % saved,
-            "cp macrowhisper.sample.json %s" % saved,
+            "cp %s %s" % (sample, saved),
         )
     return Finding.ok()
 
@@ -156,14 +157,17 @@ def _check_config_valid(ctx):
     if valid is None:
         return Finding.unknown("could not run macrowhisper --validate-config")
     if not valid:
-        return Finding.problem(detail.splitlines()[0] if detail else "config is invalid")
+        return Finding.problem(
+            detail.splitlines()[0] if detail else "config is invalid",
+            "macrowhisper --validate-config",
+        )
     return Finding.ok()
 
 
 def _check_watch_match(ctx):
     saved = ctx.mw.saved_config_path()
     config = ctx.mw.read_config(saved) if saved else None
-    if not config:
+    if config is None:
         return Finding.unknown("could not read the config file")
     configured = config.get("defaults", {}).get("watch")
     if configured is None:
@@ -222,9 +226,13 @@ def _check_folders(ctx):
     if status.recordings_folder_exists is None:
         return Finding.unknown("macrowhisper --status did not report the recordings folder")
     if not status.recordings_folder_exists:
+        if status.recordings_folder:
+            return Finding.problem(
+                "macrowhisper cannot see %s" % status.recordings_folder,
+                "mkdir -p %s" % status.recordings_folder,
+            )
         return Finding.problem(
-            "macrowhisper cannot see %s" % (status.recordings_folder or "its recordings folder"),
-            "mkdir -p %s" % (status.recordings_folder or ""),
+            "macrowhisper did not report its recordings folder path"
         )
     return Finding.ok()
 
@@ -274,10 +282,11 @@ def _check_action(ctx):
         )
     saved = ctx.mw.saved_config_path()
     config = ctx.mw.read_config(saved) if saved else None
-    if not config:
+    if config is None:
         return Finding.unknown("could not read the config to confirm the action exists")
     for category in ACTION_CATEGORIES:
-        if action in config.get(category, {}):
+        bucket = config.get(category)
+        if isinstance(bucket, dict) and action in bucket:
             return Finding.ok("%s (%s)" % (action, category))
     return Finding.problem(
         "the active action %r is not defined in %s" % (action, saved),
@@ -292,7 +301,7 @@ def _check_clipboard_buffer(ctx):
     entirely (RecordingsFolderWatcher.swift:441-443, ClipboardMonitor.swift:1139-1152)."""
     saved = ctx.mw.saved_config_path()
     config = ctx.mw.read_config(saved) if saved else None
-    if not config:
+    if config is None:
         return Finding.unknown("could not read the config file")
     value = config.get("defaults", {}).get("clipboardBuffer")
     if value is None:
@@ -300,6 +309,11 @@ def _check_clipboard_buffer(ctx):
             "clipboardBuffer is unset, so it defaults to %.0fs and any dictation "
             "longer than that loses its pre-recording clipboard"
             % DEFAULT_CLIPBOARD_BUFFER_S,
+            CONFIG_SURGERY_HINT % saved,
+        )
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return Finding.problem(
+            "clipboardBuffer is %r, which is not a number" % (value,),
             CONFIG_SURGERY_HINT % saved,
         )
     if float(value) <= DEFAULT_CLIPBOARD_BUFFER_S:
@@ -326,13 +340,17 @@ def _check_accessibility(ctx):
             "then macrowhisper --restart-service",
         )
     started_ago = ctx.mw.status().watcher_started_ago_s
-    if when is not None and started_ago is not None:
-        daemon_started = datetime.now() - timedelta(seconds=started_ago)
-        if when < daemon_started - timedelta(seconds=ACCESSIBILITY_STALE_MARGIN_S):
-            return Finding.unknown(
-                "the newest Accessibility line predates the running daemon, so it "
-                "describes a previous one"
-            )
+    if when is None or started_ago is None:
+        return Finding.unknown(
+            "macrowhisper's log reports Accessibility as granted, but the daemon's "
+            "start time is unknown, so we cannot confirm the line is fresh"
+        )
+    daemon_started = datetime.now() - timedelta(seconds=started_ago)
+    if when < daemon_started - timedelta(seconds=ACCESSIBILITY_STALE_MARGIN_S):
+        return Finding.unknown(
+            "the newest Accessibility line predates the running daemon, so it "
+            "describes a previous one"
+        )
     return Finding.ok("granted")
 
 
