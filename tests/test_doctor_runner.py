@@ -50,6 +50,12 @@ class TestOrdering(unittest.TestCase):
         with self.assertRaises(ValueError):
             order_checks(checks)
 
+    def test_a_duplicate_check_id_is_a_table_bug_and_raises(self):
+        # Two rows sharing an id would make one check silently shadow the other.
+        checks = [check("a", lambda c: Finding.ok()), check("a", lambda c: Finding.ok())]
+        with self.assertRaises(ValueError):
+            order_checks(checks)
+
 
 class TestBlocking(unittest.TestCase):
     def test_a_dependent_of_a_problem_is_unknown_not_a_failure(self):

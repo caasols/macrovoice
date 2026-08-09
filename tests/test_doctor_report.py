@@ -100,5 +100,24 @@ class TestRender(unittest.TestCase):
         self.assertNotIn("note", rendered)
 
 
+class TestUnknownGroup(unittest.TestCase):
+    """A check whose id carries no known prefix must still be rendered.
+
+    If the fallback were wrong the check would vanish from the report entirely,
+    which is a silent omission in a tool whose whole purpose is not omitting
+    things.
+    """
+
+    def test_an_unprefixed_check_is_rendered_under_other(self):
+        rendered = render([result("orphan.check", Finding.ok("still here"))])
+        self.assertIn("Other", rendered)
+        self.assertIn("orphan.check", rendered)
+        self.assertIn("still here", rendered)
+
+    def test_it_is_counted_in_the_summary(self):
+        rendered = render([result("orphan.check", Finding.ok())])
+        self.assertIn("1 ok", rendered)
+
+
 if __name__ == "__main__":
     unittest.main()
