@@ -1,8 +1,11 @@
 """Every check, against fake adapters. No Mac state, no daemon, no VoiceInk."""
 
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -97,6 +100,21 @@ class TestPrerequisites(unittest.TestCase):
         self.assertIs(finding.outcome, Outcome.PROBLEM)
         self.assertIn("brew install", finding.fix_hint)
 
+    def test_voiceink_found_is_ok(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            voiceink_path = Path(tmpdir) / "VoiceInk.app"
+            voiceink_path.mkdir()
+            with mock.patch.object(registry, "VOICEINK_APP_PATHS", (voiceink_path,)):
+                finding = registry._check_voiceink_installed(context())
+                self.assertIs(finding.outcome, Outcome.OK)
+                self.assertIn(str(voiceink_path), finding.detail)
+
+    def test_voiceink_not_found_is_a_problem(self):
+        with mock.patch.object(registry, "VOICEINK_APP_PATHS", (Path("/nonexistent/VoiceInk.app"),)):
+            finding = registry._check_voiceink_installed(context())
+            self.assertIs(finding.outcome, Outcome.PROBLEM)
+            self.assertIn("VoiceInk.app not found", finding.detail)
+
 
 class TestBridgeLayout(unittest.TestCase):
     def test_missing_watch_root_is_a_problem(self):
@@ -112,11 +130,56 @@ class TestBridgeLayout(unittest.TestCase):
     def test_both_present_is_ok(self):
         self.assertIs(registry._check_watch_dirs(context()).outcome, Outcome.OK)
 
+    def test_script_does_not_exist_is_a_problem(self):
+        ctx = context(bridge=FakeBridge(script=Path("/nonexistent/macrovoice.sh")))
+        finding = registry._check_script(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("does not exist", finding.detail)
+
+    def test_script_not_executable_is_a_problem(self):
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            script_path = Path(f.name)
+        try:
+            os.chmod(str(script_path), 0o644)
+            ctx = context(bridge=FakeBridge(script=script_path))
+            finding = registry._check_script(ctx)
+            self.assertIs(finding.outcome, Outcome.PROBLEM)
+            self.assertIn("not executable", finding.detail)
+            self.assertIn("chmod +x", finding.fix_hint)
+            self.assertIn(str(script_path), finding.fix_hint)
+        finally:
+            script_path.unlink()
+
+    def test_script_executable_is_ok(self):
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            script_path = Path(f.name)
+        try:
+            os.chmod(str(script_path), 0o755)
+            ctx = context(bridge=FakeBridge(script=script_path))
+            finding = registry._check_script(ctx)
+            self.assertIs(finding.outcome, Outcome.OK)
+        finally:
+            script_path.unlink()
+
     def test_a_non_empty_spool_is_a_problem(self):
         ctx = context(bridge=FakeBridge(spool_count=2))
         finding = registry._check_spool(ctx)
         self.assertIs(finding.outcome, Outcome.PROBLEM)
         self.assertIn("2", finding.detail)
+        self.assertIn("spool plus staging", finding.detail)
+
+    def test_spool_drain_command_names_the_script_path(self):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".sh") as f:
+            script_path = Path(f.name)
+        try:
+            os.chmod(str(script_path), 0o755)
+            ctx = context(bridge=FakeBridge(spool_count=1, script=script_path))
+            finding = registry._check_spool(ctx)
+            self.assertIs(finding.outcome, Outcome.PROBLEM)
+            self.assertIn(str(script_path), finding.fix_hint)
+            self.assertIn("--drain-only", finding.fix_hint)
+        finally:
+            script_path.unlink()
 
     def test_recent_errors_are_reported(self):
         ctx = context(bridge=FakeBridge(errors=("2026-08-09T10:00:00Z ERROR boom",)))

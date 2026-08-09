@@ -93,8 +93,8 @@ def _check_spool(ctx):
     waiting = snapshot.spool_count + snapshot.staging_count
     if waiting:
         return Finding.problem(
-            "%d transcript(s) waiting in the spool" % waiting,
-            "macrovoice --drain-only --watch %s" % snapshot.watch_root,
+            "%d transcript(s) waiting to be published (spool plus staging)" % waiting,
+            "%s --drain-only --watch %s" % (ctx.bridge.script_path(), snapshot.watch_root),
         )
     return Finding.ok()
 
