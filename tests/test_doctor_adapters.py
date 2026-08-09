@@ -1,5 +1,6 @@
 """Adapters, driven through an injected fake runner so no daemon is involved."""
 
+import os
 import sys
 import traceback
 import unittest
@@ -303,6 +304,82 @@ class TestBridgeState(unittest.TestCase):
             self.assertEqual(len(errors), 1)
             # The published line should not be part of the error.
             self.assertNotIn("published", errors[0])
+
+
+class TestAdapterDegradation(unittest.TestCase):
+    """Every command promises the same thing: a timeout or an unrunnable binary
+    becomes an UNKNOWN-shaped result, never a hang and never a guess. Only
+    status() had that test."""
+
+    def timing_out(self, flag):
+        return FakeRunner({flag: CommandResult(None, "", "", True)})
+
+    def test_validate_config_degrades(self):
+        valid, _ = Macrowhisper(runner=self.timing_out("--validate-config")).validate_config()
+        self.assertIsNone(valid)
+
+    def test_service_installed_degrades(self):
+        self.assertIsNone(
+            Macrowhisper(runner=self.timing_out("--service-status")).service_installed()
+        )
+
+    def test_config_path_degrades(self):
+        self.assertIsNone(Macrowhisper(runner=self.timing_out("--get-config")).config_path())
+
+    def test_service_installed_is_none_when_the_line_is_absent(self):
+        runner = FakeRunner({"--service-status": ok("Service Status:\n  Running: Yes\n")})
+        self.assertIsNone(Macrowhisper(runner=runner).service_installed())
+
+
+class TestAccessibilityLogEdges(unittest.TestCase):
+    def write(self, tmp, body):
+        path = Path(tmp) / "macrowhisper.log"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def test_no_matching_line_is_unknown(self):
+        with TemporaryDirectory() as tmp:
+            path = self.write(tmp, "[2026-08-09 11:02:53] [DEBUG] Something unrelated\n")
+            self.assertEqual(
+                Macrowhisper(log_path=str(path)).accessibility_state(), (None, None)
+            )
+
+    def test_a_malformed_timestamp_still_reports_the_grant(self):
+        with TemporaryDirectory() as tmp:
+            path = self.write(tmp, "[not-a-date] Accessibility permissions already granted\n")
+            granted, when = Macrowhisper(log_path=str(path)).accessibility_state()
+            self.assertTrue(granted)
+            self.assertIsNone(when)
+
+
+class TestBridgeEdges(unittest.TestCase):
+    def test_env_python_with_short_output_is_none(self):
+        runner = FakeRunner({"python3": ok("only-one-line\n")})
+        self.assertEqual(BridgeState("/tmp/w", runner=runner).env_python(), (None, None))
+
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses mode bits")
+    def test_recent_log_errors_errors_on_an_unreadable_log_is_empty(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log = root / "macrovoice.log"
+            log.write_text("x", encoding="utf-8")
+            log.chmod(0o000)
+            try:
+                self.assertEqual(BridgeState(root).recent_log_errors(), ())
+            finally:
+                log.chmod(0o644)
+
+    def test_a_tail_beginning_mid_entry_skips_the_orphan_line(self):
+        # The tail window can open inside a multi-line traceback, so the first
+        # physical line may be a continuation with no timestamp.
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "macrovoice.log").write_text(
+                "    File \"x.py\", line 1, in <module>\n"
+                "ValueError: orphaned\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(BridgeState(root).recent_log_errors(), ())
 
 
 if __name__ == "__main__":
