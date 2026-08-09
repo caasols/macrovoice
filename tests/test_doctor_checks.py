@@ -653,5 +653,73 @@ class TestDefaultConfigFixture(unittest.TestCase):
         self.assertIn("Documents/superwhisper", finding.detail)
 
 
+class TestUncoveredCheckPaths(unittest.TestCase):
+    """The UNKNOWN and PROBLEM branches the suite never reached.
+
+    UNKNOWN is the feature's central idea: a check that cannot tell must say so
+    rather than guess. Five of its paths had no test.
+    """
+
+    def test_watch_match_with_an_unreadable_config_is_unknown(self):
+        ctx = context(mw=FakeMacrowhisper(config=None))
+        self.assertIs(registry._check_watch_match(ctx).outcome, Outcome.UNKNOWN)
+
+    def test_watch_match_with_no_watch_key_is_a_problem(self):
+        ctx = context(mw=FakeMacrowhisper(config={"defaults": {}}))
+        finding = registry._check_watch_match(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("watch", finding.detail)
+
+    def test_armed_is_unknown_when_status_did_not_report_the_watcher(self):
+        status = StatusSnapshot(running=True, recognized=True, watcher_armed=None)
+        ctx = context(mw=FakeMacrowhisper(status=status))
+        self.assertIs(registry._check_armed(ctx).outcome, Outcome.UNKNOWN)
+
+    def test_moveto_is_unknown_when_status_did_not_report_it(self):
+        status = StatusSnapshot(running=True, recognized=True, move_to=None)
+        ctx = context(mw=FakeMacrowhisper(status=status))
+        self.assertIs(registry._check_moveto(ctx).outcome, Outcome.UNKNOWN)
+
+    def test_action_with_no_active_action_is_a_problem(self):
+        status = StatusSnapshot(running=True, recognized=True, active_action="(none)")
+        ctx = context(mw=FakeMacrowhisper(status=status, config={"inserts": {}}))
+        finding = registry._check_action(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("--action", finding.fix_hint)
+
+    def test_action_is_unknown_when_the_config_cannot_be_read(self):
+        status = StatusSnapshot(running=True, recognized=True, active_action="autoPaste")
+        ctx = context(mw=FakeMacrowhisper(status=status, config=None))
+        self.assertIs(registry._check_action(ctx).outcome, Outcome.UNKNOWN)
+
+    def test_clipboard_buffer_is_unknown_when_the_config_cannot_be_read(self):
+        ctx = context(mw=FakeMacrowhisper(config=None))
+        self.assertIs(registry._check_clipboard_buffer(ctx).outcome, Outcome.UNKNOWN)
+
+    def test_clipboard_buffer_unset_is_a_problem(self):
+        ctx = context(mw=FakeMacrowhisper(config={"defaults": {}}))
+        self.assertIs(registry._check_clipboard_buffer(ctx).outcome, Outcome.PROBLEM)
+
+
+class TestVersionTuple(unittest.TestCase):
+    """The comparison that decides whether 3.10 is newer than 3.9."""
+
+    def test_ordinary_versions(self):
+        self.assertEqual(registry._version_tuple("3.9.6"), (3, 9, 6))
+        self.assertEqual(registry._version_tuple("3.14.6"), (3, 14, 6))
+
+    def test_ten_is_newer_than_nine(self):
+        self.assertGreater(registry._version_tuple("3.10.0"), registry._version_tuple("3.9.6"))
+
+    def test_a_prerelease_suffix_stops_at_the_digits(self):
+        self.assertEqual(registry._version_tuple("3.13.0rc1"), (3, 13, 0))
+
+    def test_a_short_version(self):
+        self.assertEqual(registry._version_tuple("3"), (3,))
+
+    def test_an_empty_string_is_empty(self):
+        self.assertEqual(registry._version_tuple(""), ())
+
+
 if __name__ == "__main__":
     unittest.main()
