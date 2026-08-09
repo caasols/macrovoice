@@ -544,14 +544,21 @@ class TestFolders(unittest.TestCase):
 
 class TestDefaultConfigFixture(unittest.TestCase):
     """Drives checks through parse_status() on a fixture built from
-    SocketCommunication.swift:3246-3270, representing a stock, never
-    configured daemon. This is the shape of input the real daemon can
-    produce, which a hand-built StatusSnapshot(move_to="") cannot:
-    --status never emits an empty string, only "(none)"
-    (SocketCommunication.swift:3259). That gap between the fixture corpus
-    and the real output is exactly how the C1 false OK on moveTo survived
-    130 tests, so these checks are driven off the parser, never a
-    hand-constructed snapshot.
+    SocketCommunication.swift:3246-3270 and the compiled Defaults.defaultValues()
+    (AppConfiguration.swift:376-407), representing a stock, never configured
+    daemon. This is the shape of input the real daemon can produce, which a
+    hand-built StatusSnapshot(move_to="") cannot: --status never emits an
+    empty string, only "(none)" (SocketCommunication.swift:3259). That gap
+    between the fixture corpus and the real output is exactly how the C1
+    false OK on moveTo survived 130 tests, so these checks are driven off the
+    parser, never a hand-constructed snapshot.
+
+    The assertions below are the honest answer for THIS state, not a
+    preselected list of problems: defaultValues() also sets activeAction to
+    "autoPaste" and defaultConfig() seeds a matching "autoPaste" insert
+    (AppConfiguration.swift:381, :1007-1035), so mw.action is genuinely OK
+    on a stock daemon. Asserting a problem there would itself be a false
+    report, the exact failure mode this feature exists to avoid.
     """
 
     def setUp(self):
@@ -570,13 +577,28 @@ class TestDefaultConfigFixture(unittest.TestCase):
         ctx = context(mw=FakeMacrowhisper(status=self.status))
         self.assertIs(registry._check_simesc(ctx).outcome, Outcome.PROBLEM)
 
-    def test_active_action_is_a_problem_not_ok(self):
-        ctx = context(mw=FakeMacrowhisper(status=self.status))
-        self.assertIs(registry._check_action(ctx).outcome, Outcome.PROBLEM)
+    def test_active_action_is_ok_when_autopaste_is_defined(self):
+        # A stock config really does define the "autoPaste" it names as
+        # active (AppConfiguration.swift:1007-1035's defaultConfig()), so
+        # this must read OK, not PROBLEM.
+        ctx = context(
+            mw=FakeMacrowhisper(status=self.status, config={"inserts": {"autoPaste": {}}})
+        )
+        self.assertIs(registry._check_action(ctx).outcome, Outcome.OK)
 
     def test_missing_recordings_folder_is_a_problem_not_ok(self):
         ctx = context(mw=FakeMacrowhisper(status=self.status))
         self.assertIs(registry._check_folders(ctx).outcome, Outcome.PROBLEM)
+
+    def test_stock_watch_path_mismatches_a_real_bridge_root_and_is_a_problem(self):
+        # The stock watch path is ~/Documents/superwhisper, the exact
+        # directory this project's README tells users never to point the
+        # bridge at. Checked against any real bridge watch root, that is a
+        # mismatch macrowhisper would otherwise silently sit on.
+        ctx = context(mw=FakeMacrowhisper(status=self.status), watch_root="/tmp/w")
+        finding = registry._check_watch_match(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("Documents/superwhisper", finding.detail)
 
 
 if __name__ == "__main__":
