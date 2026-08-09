@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from macrovoice.doctor.adapters.macrowhisper import Macrowhisper  # noqa: E402
 from macrovoice.doctor.adapters.process import CommandResult  # noqa: E402
+from macrovoice.doctor.adapters.bridge import BridgeState  # noqa: E402
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "doctor" / "status"
 
@@ -136,6 +137,69 @@ class TestAccessibilityLog(unittest.TestCase):
         granted, when = Macrowhisper(log_path="/nonexistent/macrowhisper.log").accessibility_state()
         self.assertIsNone(granted)
         self.assertIsNone(when)
+
+
+class TestBridgeState(unittest.TestCase):
+    def test_missing_watch_root_is_reported_not_created(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "absent"
+            snap = BridgeState(root).snapshot()
+            self.assertFalse(snap.watch_exists)
+            self.assertFalse(snap.recordings_exists)
+            self.assertFalse(root.exists())  # doctor --check must never create it
+
+    def test_counts_spool_and_staging(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "recordings").mkdir()
+            (root / ".spool" / "a").mkdir(parents=True)
+            (root / ".spool" / "b").mkdir()
+            (root / ".staging").mkdir()
+            snap = BridgeState(root).snapshot()
+            self.assertTrue(snap.watch_exists)
+            self.assertTrue(snap.recordings_exists)
+            self.assertEqual(snap.spool_count, 2)
+            self.assertEqual(snap.staging_count, 0)
+
+    def test_script_path_points_at_the_repo_root_wrapper(self):
+        state = BridgeState("/tmp/w")
+        self.assertEqual(state.script_path().name, "macrovoice.sh")
+        self.assertTrue(state.script_path().exists())
+
+    def test_env_python_reports_the_interpreter_the_wrapper_will_get(self):
+        version_out = "/opt/homebrew/opt/python/bin/python3.14\n3.14.6\n"
+        runner = FakeRunner({"python3": ok(version_out)})
+        executable, version = BridgeState("/tmp/w", runner=runner).env_python()
+        self.assertEqual(version, "3.14.6")
+        self.assertTrue(executable.endswith("python3.14"))
+
+    def test_env_python_is_none_when_it_cannot_be_run(self):
+        runner = FakeRunner({"python3": CommandResult(None, "", "boom", False)})
+        self.assertEqual(BridgeState("/tmp/w", runner=runner).env_python(), (None, None))
+
+    def test_recent_log_errors_ignores_old_ones(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "macrovoice.log").write_text(
+                "2020-01-01T00:00:00Z ERROR (exiting 0 anyway): ancient\n"
+                "2026-08-09T15:25:13Z published 1786289113229804000-000 chars=73\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(BridgeState(root).recent_log_errors(within_hours=24), ())
+
+    def test_recent_log_errors_reports_fresh_ones(self):
+        from datetime import datetime as dt, timedelta, timezone
+
+        stamp = (dt.now(timezone.utc) - timedelta(minutes=5)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "macrovoice.log").write_text(
+                "%s ERROR (exiting 0 anyway): Traceback\n" % stamp, encoding="utf-8"
+            )
+            errors = BridgeState(root).recent_log_errors(within_hours=24)
+            self.assertEqual(len(errors), 1)
 
 
 if __name__ == "__main__":
