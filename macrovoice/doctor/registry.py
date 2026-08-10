@@ -388,10 +388,23 @@ def _check_accessibility(ctx):
 
     UNKNOWN is reserved for the one genuinely unresolvable case: no
     Accessibility line found in the tail at all.
+
+    That genuinely unresolvable case has a second cause, found live on
+    2026-08-11 and not by review: macrowhisper rotates its own log at 5MB and
+    keeps one backup (Logger.swift:18, :22), so the startup line ages out of
+    retention on a long-running daemon. The adapter now reads the retained
+    backup as well, which makes this rare rather than routine, but a daemon up
+    across two full rotations still lands here. It stays FAIL-severity UNKNOWN
+    and still exits 2, deliberately: a genuinely denied permission must not be
+    downgraded to a note.
     """
     granted, _when = ctx.mw.accessibility_state()
     if granted is None:
-        return Finding.unknown("no Accessibility line found in macrowhisper's log")
+        return Finding.unknown(
+            "no Accessibility line in the live or rotated log; macrowhisper has "
+            "rotated past its own startup line, so run macrowhisper "
+            "--restart-service to re-log it"
+        )
     if not granted:
         return Finding.problem(
             "macrowhisper started without Accessibility permission, so it cannot paste",

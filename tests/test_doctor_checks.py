@@ -479,6 +479,16 @@ class TestAccessibility(unittest.TestCase):
         ctx = context(mw=FakeMacrowhisper(accessibility=(None, None)))
         self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.UNKNOWN)
 
+    def test_the_unknown_says_the_log_rotated_and_how_to_refresh_it(self):
+        # The message must not read as a doctor defect. macrowhisper rotates
+        # at 5MB keeping one backup, so a long-running daemon's startup line
+        # can age out of retention entirely. Restarting it re-logs the line.
+        ctx = context(mw=FakeMacrowhisper(accessibility=(None, None)))
+        finding = registry._check_accessibility(ctx)
+        self.assertIs(finding.outcome, Outcome.UNKNOWN)
+        self.assertIn("rotated", finding.detail)
+        self.assertIn("--restart-service", finding.detail)
+
     def test_granted_is_ok_no_matter_how_old_the_line_is(self):
         # Regression for the false FAIL-severity UNKNOWN found live: a grant
         # line logged hours or days ago (the daemon has been up since) must
