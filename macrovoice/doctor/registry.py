@@ -368,11 +368,12 @@ def _check_clipboard_buffer(ctx):
 def _check_accessibility(ctx):
     """Friction trap 4: macrowhisper checks and logs Accessibility exactly once
     per process, unconditionally, at true process startup
-    (main.swift:1905 requestAccessibilityPermissionOnStartup(), which logs one
-    of Accessibility.swift:51 or :62), in the same instant it raises the
-    prompt. Because every startup emits exactly one such line, the newest one
-    in the log always describes the currently running process: there is no
-    freshness comparison to make, and there used to be a false one here.
+    (main.swift:1905 requestAccessibilityPermissionOnStartup(), which logs
+    exactly one of Accessibility.swift:51, :59 or :62), in the same instant it
+    raises the prompt. Because every startup emits exactly one such line, the
+    newest one in the log always describes the currently running process:
+    there is no freshness comparison to make, and there used to be a false one
+    here.
 
     A previous version of this check compared the grant line's timestamp
     against a "daemon start time" derived from `--status`'s watcher age
@@ -387,7 +388,8 @@ def _check_accessibility(ctx):
     healthy machine after every lid-open.
 
     UNKNOWN is reserved for the one genuinely unresolvable case: no
-    Accessibility line found in the tail at all.
+    Accessibility line found in either the live log or the newest rotated
+    backup.
 
     That genuinely unresolvable case has a second cause, found live on
     2026-08-11 and not by review: macrowhisper rotates its own log at 5MB and
@@ -402,8 +404,8 @@ def _check_accessibility(ctx):
     if granted is None:
         return Finding.unknown(
             "no Accessibility line in the live or rotated log; macrowhisper has "
-            "rotated past its own startup line, so run macrowhisper "
-            "--restart-service to re-log it"
+            "rotated past its own startup line, or its log is unreadable, so "
+            "run macrowhisper --restart-service to re-log it"
         )
     if not granted:
         return Finding.problem(

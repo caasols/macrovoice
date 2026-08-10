@@ -447,6 +447,45 @@ class TestAccessibilityLogEdges(unittest.TestCase):
                 Macrowhisper(log_path=str(path)).accessibility_state(), (None, None)
             )
 
+    def test_the_prompted_grant_wording_is_recognized(self):
+        # Accessibility.swift:59 logs "Accessibility permissions granted" when
+        # the prompt was shown and the user granted it, distinct from :51's
+        # "already granted" wording. Missing this pattern would fall through
+        # to the rotated log, so a rotated denial must be here to prove the
+        # live log's own wording is what wins.
+        with TemporaryDirectory() as tmp:
+            path = self.write(
+                tmp,
+                "[2026-08-10 19:00:00] [INFO] Accessibility permissions granted\n",
+            )
+            rotated = Path(tmp) / "macrowhisper.log.2026-08-10 18-14-18"
+            rotated.write_text(
+                "[2026-08-10 01:23:42] [WARNING] Accessibility permissions were not granted"
+                " - some features may be limited\n",
+                encoding="utf-8",
+            )
+            granted, _ = Macrowhisper(log_path=str(path)).accessibility_state()
+            self.assertIs(granted, True)
+
+    def test_the_live_log_takes_precedence_over_the_rotated_backup(self):
+        # Even when both files have a matching line, the live log must win:
+        # an implementation that consulted the backup first would still pass
+        # every other test in this class.
+        with TemporaryDirectory() as tmp:
+            path = self.write(
+                tmp,
+                "[2026-08-10 19:00:00] [DEBUG] Accessibility permissions already granted\n",
+            )
+            rotated = Path(tmp) / "macrowhisper.log.2026-08-01 00-00-00"
+            rotated.write_text(
+                "[2026-08-01 00:00:00] [WARNING] Accessibility permissions were not granted"
+                " - some features may be limited\n",
+                encoding="utf-8",
+            )
+            granted, when = Macrowhisper(log_path=str(path)).accessibility_state()
+            self.assertIs(granted, True)
+            self.assertEqual(when, datetime(2026, 8, 10, 19, 0, 0))
+
 
 class TestBridgeEdges(unittest.TestCase):
     def test_env_python_with_short_output_is_none(self):

@@ -159,6 +159,7 @@ DEFAULT_LOG_PATH = "~/Library/Logs/Macrowhisper/macrowhisper.log"
 SAVED_CONFIG_PREFIX = "Saved config path:"
 DEFAULT_CONFIG_PREFIX = "Using default config path:"
 ACCESS_GRANTED = "Accessibility permissions already granted"
+ACCESS_GRANTED_PROMPTED = "Accessibility permissions granted"
 ACCESS_DENIED = "Accessibility permissions were not granted"
 CONFIG_VALID = "Configuration is valid"
 
@@ -171,8 +172,8 @@ def _newest_access_line(path):
     Streams the whole file forward rather than tail-seeking a window. The
     window read this replaced was unsound: macrowhisper logs its Accessibility
     line exactly once per process, at startup (main.swift:1905, logging one of
-    Accessibility.swift:51 or :62), so a daemon that restarts and then logs
-    past the window drops its own line out of view. With the rotated-log
+    Accessibility.swift:51, :59 or :62), so a daemon that restarts and then
+    logs past the window drops its own line out of view. With the rotated-log
     fallback in place that would surface the PREVIOUS process's verdict as if
     it described the running one.
 
@@ -186,6 +187,8 @@ def _newest_access_line(path):
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 if ACCESS_GRANTED in line:
+                    found = (True, line)
+                elif ACCESS_GRANTED_PROMPTED in line:
                     found = (True, line)
                 elif ACCESS_DENIED in line:
                     found = (False, line)
