@@ -194,6 +194,39 @@ def _newest_access_line(path):
     return found
 
 
+def _mtime(path):
+    """Modification time, or -1.0 for anything that cannot be stat-ed, which
+    sorts it last. A broken symlink matching the rotation glob is the realistic
+    case."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return -1.0
+
+
+def _newest_rotated_log(live):
+    """The most recently modified rotated sibling of `live`, else None.
+
+    macrowhisper rotates to "<name>.<timestamp>" and keeps exactly ONE backup
+    (Logger.swift:18 maxLogSize, :22 maxLogFiles, :72-91 checkAndRotateLog,
+    :94-143 cleanupOldLogs). Anything older is out of retention, so only the
+    newest is consulted.
+
+    Reading it cannot surface a stale verdict, and that is the load-bearing
+    argument for this whole fallback: macrowhisper writes exactly one
+    Accessibility line per process start, and cleanupOldLogs deletes
+    oldest-first. So the newest line in retained history is either the running
+    daemon's own startup line or there is none at all. No newer line can exist
+    while the daemon is still running, and an older process's line cannot
+    outlive the current one's. This is why no pid and no process start time is
+    needed here; see the design doc, section 2.
+    """
+    candidates = list(live.parent.glob(live.name + ".*"))
+    if not candidates:
+        return None
+    return max(candidates, key=_mtime)
+
+
 class Macrowhisper:
     """Read-only view of a macrowhisper install. Stage 1 never mutates anything.
 
@@ -290,8 +323,14 @@ class Macrowhisper:
         one here; see the docstring on registry._check_accessibility.
 
         The whole file is scanned, not a tail window. See _newest_access_line.
+
+        When the live log has no such line, macrowhisper has rotated it. The
+        newest retained backup is consulted, which is sound for the reason
+        given on _newest_rotated_log.
         """
         found = _newest_access_line(self._log_path)
+        if found is None:
+            found = _newest_access_line(_newest_rotated_log(self._log_path))
         if found is None:
             return None, None
         granted, line = found

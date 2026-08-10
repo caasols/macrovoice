@@ -367,6 +367,84 @@ class TestAccessibilityLogEdges(unittest.TestCase):
             self.assertTrue(granted)
             self.assertEqual(when, datetime(2026, 8, 10, 1, 23, 42))
 
+    def test_a_rotated_log_supplies_the_line_when_the_live_log_has_none(self):
+        # The live defect, 2026-08-11: macrowhisper rotates at 5MB and keeps
+        # one backup (Logger.swift:18, :22), and writes the Accessibility line
+        # only at startup, so a rotation leaves the live log without one.
+        with TemporaryDirectory() as tmp:
+            path = self.write(tmp, "[2026-08-10 19:00:00] [DEBUG] nothing relevant here\n")
+            rotated = Path(tmp) / "macrowhisper.log.2026-08-10 18-14-18"
+            rotated.write_text(
+                "[2026-08-10 01:23:42] [DEBUG] Accessibility permissions already granted\n"
+                "[2026-08-10 01:23:43] [DEBUG] later noise\n",
+                encoding="utf-8",
+            )
+            granted, when = Macrowhisper(log_path=str(path)).accessibility_state()
+            self.assertTrue(granted)
+            self.assertEqual(when, datetime(2026, 8, 10, 1, 23, 42))
+
+    def test_a_rotated_denial_is_reported_not_swallowed(self):
+        with TemporaryDirectory() as tmp:
+            path = self.write(tmp, "[2026-08-10 19:00:00] [DEBUG] nothing relevant here\n")
+            rotated = Path(tmp) / "macrowhisper.log.2026-08-10 18-14-18"
+            rotated.write_text(
+                "[2026-08-10 01:23:42] [WARNING] Accessibility permissions were not granted"
+                " - some features may be limited\n",
+                encoding="utf-8",
+            )
+            granted, _ = Macrowhisper(log_path=str(path)).accessibility_state()
+            self.assertFalse(granted)
+
+    def test_the_newest_rotated_log_wins(self):
+        with TemporaryDirectory() as tmp:
+            path = self.write(tmp, "[2026-08-10 19:00:00] [DEBUG] nothing relevant here\n")
+            older = Path(tmp) / "macrowhisper.log.2026-08-01 00-00-00"
+            older.write_text(
+                "[2026-08-01 00:00:00] [WARNING] Accessibility permissions were not granted"
+                " - some features may be limited\n",
+                encoding="utf-8",
+            )
+            newer = Path(tmp) / "macrowhisper.log.2026-08-10 18-14-18"
+            newer.write_text(
+                "[2026-08-10 01:23:42] [DEBUG] Accessibility permissions already granted\n",
+                encoding="utf-8",
+            )
+            os.utime(older, (1000000, 1000000))
+            os.utime(newer, (2000000, 2000000))
+            granted, _ = Macrowhisper(log_path=str(path)).accessibility_state()
+            self.assertTrue(granted)
+
+    def test_an_unstatable_rotated_candidate_does_not_crash_the_check(self):
+        # A broken symlink matches the glob but cannot be stat-ed. It must sort
+        # last and never raise: doctor is read-only and a check that throws is
+        # worse than one that says unknown.
+        with TemporaryDirectory() as tmp:
+            path = self.write(tmp, "[2026-08-10 19:00:00] [DEBUG] nothing relevant here\n")
+            good = Path(tmp) / "macrowhisper.log.2026-08-10 18-14-18"
+            good.write_text(
+                "[2026-08-10 01:23:42] [DEBUG] Accessibility permissions already granted\n",
+                encoding="utf-8",
+            )
+            (Path(tmp) / "macrowhisper.log.broken").symlink_to(Path(tmp) / "nonexistent")
+            granted, _ = Macrowhisper(log_path=str(path)).accessibility_state()
+            self.assertTrue(granted)
+
+    def test_an_unreadable_rotated_log_is_unknown_not_a_crash(self):
+        with TemporaryDirectory() as tmp:
+            path = self.write(tmp, "[2026-08-10 19:00:00] [DEBUG] nothing relevant here\n")
+            only = Path(tmp) / "macrowhisper.log.broken"
+            only.symlink_to(Path(tmp) / "nonexistent")
+            self.assertEqual(
+                Macrowhisper(log_path=str(path)).accessibility_state(), (None, None)
+            )
+
+    def test_no_rotated_log_at_all_is_unknown(self):
+        with TemporaryDirectory() as tmp:
+            path = self.write(tmp, "[2026-08-10 19:00:00] [DEBUG] nothing relevant here\n")
+            self.assertEqual(
+                Macrowhisper(log_path=str(path)).accessibility_state(), (None, None)
+            )
+
 
 class TestBridgeEdges(unittest.TestCase):
     def test_env_python_with_short_output_is_none(self):
