@@ -349,6 +349,24 @@ class TestAccessibilityLogEdges(unittest.TestCase):
             self.assertTrue(granted)
             self.assertIsNone(when)
 
+    def test_a_line_beyond_the_old_tail_window_is_still_found(self):
+        # Regression for the window bug: macrowhisper writes its Accessibility
+        # line once, at startup, so a daemon that restarts and then logs
+        # heavily pushes that line far back in the live log. A 256KB tail read
+        # missed it, which would have let the PREVIOUS process's verdict
+        # through from the rotated log once the fallback existed.
+        with TemporaryDirectory() as tmp:
+            filler = "[2026-08-10 02:00:00] [DEBUG] noise\n" * 12000
+            self.assertGreater(len(filler.encode("utf-8")), 262144)
+            path = self.write(
+                tmp,
+                "[2026-08-10 01:23:42] [DEBUG] Accessibility permissions already granted\n"
+                + filler,
+            )
+            granted, when = Macrowhisper(log_path=str(path)).accessibility_state()
+            self.assertTrue(granted)
+            self.assertEqual(when, datetime(2026, 8, 10, 1, 23, 42))
+
 
 class TestBridgeEdges(unittest.TestCase):
     def test_env_python_with_short_output_is_none(self):

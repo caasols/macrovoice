@@ -156,7 +156,6 @@ def parse_status(text: str) -> StatusSnapshot:
 
 DEFAULT_TIMEOUT_S = 10.0
 DEFAULT_LOG_PATH = "~/Library/Logs/Macrowhisper/macrowhisper.log"
-LOG_TAIL_BYTES = 262144
 SAVED_CONFIG_PREFIX = "Saved config path:"
 DEFAULT_CONFIG_PREFIX = "Using default config path:"
 ACCESS_GRANTED = "Accessibility permissions already granted"
@@ -164,6 +163,35 @@ ACCESS_DENIED = "Accessibility permissions were not granted"
 CONFIG_VALID = "Configuration is valid"
 
 _LOG_STAMP = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]")
+
+
+def _newest_access_line(path):
+    """(granted, raw_line) for the NEWEST Accessibility line in `path`, else None.
+
+    Streams the whole file forward rather than tail-seeking a window. The
+    window read this replaced was unsound: macrowhisper logs its Accessibility
+    line exactly once per process, at startup (main.swift:1905, logging one of
+    Accessibility.swift:51 or :62), so a daemon that restarts and then logs
+    past the window drops its own line out of view. With the rotated-log
+    fallback in place that would surface the PREVIOUS process's verdict as if
+    it described the running one.
+
+    Returns None, never raises, when the file is absent or unreadable: doctor
+    is read-only and a check must never crash.
+    """
+    if path is None:
+        return None
+    found = None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if ACCESS_GRANTED in line:
+                    found = (True, line)
+                elif ACCESS_DENIED in line:
+                    found = (False, line)
+    except OSError:
+        return None
+    return found
 
 
 class Macrowhisper:
@@ -255,28 +283,19 @@ class Macrowhisper:
     def accessibility_state(self) -> Tuple[Optional[bool], Optional[datetime]]:
         """(granted, when) from the NEWEST Accessibility line, else (None, None).
 
-        macrowhisper checks and logs this at startup, in the same instant it
-        raises the permission prompt, so the line is stale the moment the user
-        clicks Allow and stays stale until the daemon restarts (friction trap
-        4). That is exactly why the newest line describes the CURRENT daemon,
-        and why a caller must compare it against the daemon's start rather than
-        reading it as live state.
-        """
-        try:
-            with open(self._log_path, "rb") as handle:
-                handle.seek(0, 2)
-                size = handle.tell()
-                handle.seek(max(0, size - LOG_TAIL_BYTES))
-                tail = handle.read().decode("utf-8", errors="replace")
-        except OSError:
-            return None, None
+        macrowhisper logs this once per process, at startup, in the same
+        instant it raises the permission prompt. Because every startup emits
+        exactly one such line, the newest one describes the CURRENT daemon,
+        and there is no freshness comparison to make. There used to be a false
+        one here; see the docstring on registry._check_accessibility.
 
-        for line in reversed(tail.splitlines()):
-            if ACCESS_GRANTED in line:
-                return True, _log_time(line)
-            if ACCESS_DENIED in line:
-                return False, _log_time(line)
-        return None, None
+        The whole file is scanned, not a tail window. See _newest_access_line.
+        """
+        found = _newest_access_line(self._log_path)
+        if found is None:
+            return None, None
+        granted, line = found
+        return granted, _log_time(line)
 
 
 class _Unset:
