@@ -393,24 +393,26 @@ class TestAccessibilityLogEdges(unittest.TestCase):
                 encoding="utf-8",
             )
             granted, _ = Macrowhisper(log_path=str(path)).accessibility_state()
-            self.assertFalse(granted)
+            self.assertIs(granted, False)
 
     def test_the_newest_rotated_log_wins(self):
         with TemporaryDirectory() as tmp:
             path = self.write(tmp, "[2026-08-10 19:00:00] [DEBUG] nothing relevant here\n")
-            older = Path(tmp) / "macrowhisper.log.2026-08-01 00-00-00"
-            older.write_text(
-                "[2026-08-01 00:00:00] [WARNING] Accessibility permissions were not granted"
+            # Filenames deliberately sort opposite to mtimes, so a name-based
+            # selection would fail this test.
+            name_first = Path(tmp) / "macrowhisper.log.2026-08-01 00-00-00"
+            name_first.write_text(
+                "[2026-08-01 00:00:00] [DEBUG] Accessibility permissions already granted\n",
+                encoding="utf-8",
+            )
+            name_last = Path(tmp) / "macrowhisper.log.2026-08-10 18-14-18"
+            name_last.write_text(
+                "[2026-08-10 01:23:42] [WARNING] Accessibility permissions were not granted"
                 " - some features may be limited\n",
                 encoding="utf-8",
             )
-            newer = Path(tmp) / "macrowhisper.log.2026-08-10 18-14-18"
-            newer.write_text(
-                "[2026-08-10 01:23:42] [DEBUG] Accessibility permissions already granted\n",
-                encoding="utf-8",
-            )
-            os.utime(older, (1000000, 1000000))
-            os.utime(newer, (2000000, 2000000))
+            os.utime(name_first, (2000000, 2000000))
+            os.utime(name_last, (1000000, 1000000))
             granted, _ = Macrowhisper(log_path=str(path)).accessibility_state()
             self.assertTrue(granted)
 
