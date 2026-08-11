@@ -222,7 +222,7 @@ delivered, and a 633-character dictation arrived intact.
 
 ## Tests
 
-351 tests, 5 skipped: 175 on the delivery path, 176 for `doctor`. Total branch coverage is 99%,
+361 tests, 5 skipped: 175 on the delivery path, 186 for `doctor`. Total branch coverage is 99%,
 now measured across the whole package, not just the delivery path. Every delivery-path module
 (`transcript.py`, `meta.py`, `publisher.py`, `cli.py`) is at 100%, and so is most of `doctor`:
 `model.py`, `registry.py`, `runner.py`, `report.py`, and `process.py`. What is left uncovered:
@@ -244,7 +244,7 @@ macOS across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice
 | `tests/test_doctor_*.py` (8 files) | 176 | `doctor`'s checks, adapters, runner, report and status parser, exercised without a real macrowhisper |
 
 ```sh
-python3 -m unittest discover -s tests -t tests -v      # 351 tests, 5 skipped
+python3 -m unittest discover -s tests -t tests -v      # 361 tests, 5 skipped
 MACROVOICE_INTEGRATION=1 python3 -m unittest discover -s tests -t tests
 ```
 
