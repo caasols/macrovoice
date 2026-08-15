@@ -18,6 +18,7 @@ from macrovoice.doctor.adapters.macrowhisper import (  # noqa: E402
 from macrovoice.doctor.model import Context, Outcome  # noqa: E402
 
 STATUS_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "doctor" / "status"
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _MISSING = object()
 
@@ -529,7 +530,26 @@ class TestConfigExists(unittest.TestCase):
             finding = registry._check_config_exists(ctx)
             self.assertIs(finding.outcome, Outcome.PROBLEM)
             self.assertIn(saved, finding.fix_hint)
-            self.assertIn(str(script.parent / "macrovoice.sample.json"), finding.fix_hint)
+            self.assertIn(str(script.parent / registry.SAMPLE_CONFIG_NAME), finding.fix_hint)
+
+    def test_the_sample_config_the_hint_names_actually_exists_in_the_repo(self):
+        # The hint tells the user to `cp <repo>/<sample> <their config path>`,
+        # and on a fresh install it is the FIRST thing doctor ever asks them to
+        # do. It shipped naming macrovoice.sample.json while the repo ships
+        # macrowhisper.sample.json, so following it returned "No such file or
+        # directory" and the user's very first repair attempt failed.
+        #
+        # The test above cannot catch that class of defect: it builds its
+        # expected string from the same constant the code uses, so the two agree
+        # even when both are wrong. Only checking the name against the actual
+        # filesystem does. Note this asserts against the REAL repo root, not a
+        # temp dir, which is the whole point.
+        self.assertTrue(
+            (REPO_ROOT / registry.SAMPLE_CONFIG_NAME).is_file(),
+            "doctor's fix hint names %r, which does not exist in the repo. "
+            "Following the hint would fail. Repo root: %s"
+            % (registry.SAMPLE_CONFIG_NAME, REPO_ROOT),
+        )
 
     def test_existing_config_is_ok(self):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as f:

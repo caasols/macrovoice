@@ -16,6 +16,12 @@ VOICEINK_APP_PATHS = (
 )
 MIN_PYTHON = (3, 9)
 BREW_INSTALL = "brew install ognistik/formulae/macrowhisper"
+# The config sample shipped at the repo root, named here so the hint and the file
+# cannot drift apart unnoticed. They did: this said "macrovoice.sample.json" while
+# the repo ships "macrowhisper.sample.json", so doctor's first repair instruction
+# to a fresh user pointed at a file that does not exist. Pinned to reality by
+# tests/test_doctor_checks.py, which stats it rather than restating it.
+SAMPLE_CONFIG_NAME = "macrowhisper.sample.json"
 DEFAULT_CLIPBOARD_BUFFER_S = 5.0
 RECOMMENDED_CLIPBOARD_BUFFER_S = 60.0
 # The categories a config file can define an action under. Only consumer is
@@ -153,7 +159,7 @@ def _check_config_exists(ctx):
     if saved is None:
         return Finding.unknown("no saved config path")
     if not Path(saved).expanduser().is_file():
-        sample = ctx.bridge.script_path().parent / "macrovoice.sample.json"
+        sample = ctx.bridge.script_path().parent / SAMPLE_CONFIG_NAME
         return Finding.problem(
             "%s does not exist" % saved,
             "cp %s %s" % (sample, saved),
