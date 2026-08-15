@@ -15,6 +15,7 @@ from macrovoice.doctor.adapters.macrowhisper import (  # noqa: E402
     StatusSnapshot,
     parse_status,
 )
+from macrovoice.doctor.adapters.voiceink import Mode as VoiceInkMode  # noqa: E402
 from macrovoice.doctor.model import Context, Outcome  # noqa: E402
 
 STATUS_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "doctor" / "status"
@@ -90,11 +91,50 @@ class FakeMacrowhisper:
         return self._access
 
 
-def context(mw=None, bridge=None, watch_root="/tmp/w"):
+class FakeVoiceInk:
+    """Stands in for the read-only VoiceInk adapter.
+
+    `modes=None` and `shortcut=None` mean "could not read", which the checks must
+    turn into UNKNOWN rather than into an accusation.
+    """
+
+    def __init__(self, modes=(), shortcut=True, running=False):
+        self._modes = modes
+        self._shortcut = shortcut
+        self._running = running
+
+    def modes(self):
+        return self._modes
+
+    def has_shortcut(self, mode_id):
+        return self._shortcut
+
+    def is_running(self):
+        return self._running
+
+
+def vi_mode(name="macrovoice", command="/repo/macrovoice.sh --mode macrovoice",
+            output_mode="customCommand", is_default=False, is_enabled=True,
+            mode_id="B-1"):
+    return VoiceInkMode(
+        id=mode_id, name=name, output_mode=output_mode,
+        is_default=is_default, is_enabled=is_enabled, command=command,
+    )
+
+
+def paste_mode(name="Dictation", is_default=True):
+    return VoiceInkMode(
+        id="D-1", name=name, output_mode="paste",
+        is_default=is_default, is_enabled=True, command=None,
+    )
+
+
+def context(mw=None, bridge=None, watch_root="/tmp/w", vi=None):
     return Context(
         watch_root=Path(watch_root),
         mw=mw or FakeMacrowhisper(),
         bridge=bridge or FakeBridge(),
+        vi=vi if vi is not None else FakeVoiceInk(),
     )
 
 
@@ -516,6 +556,266 @@ class TestAccessibility(unittest.TestCase):
             mw=FakeMacrowhisper(accessibility=(True, datetime.now() - timedelta(days=2)))
         )
         self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.OK)
+
+
+class TestVoiceInkChecks(unittest.TestCase):
+    """Stage 2, the read-only VoiceInk half.
+
+    These cover the traps that make the bridge look broken while nothing is
+    actually wrong with it. Across a full day of live testing the bridge failed
+    zero times and thirteen setup mistakes did, twelve of which present to the
+    user as "the bridge does not work". The most common is `vi.reachable`.
+    """
+
+    def script(self, tmpdir, name="macrovoice.sh", executable=True):
+        path = Path(tmpdir) / name
+        path.write_text("#!/bin/zsh\n")
+        os.chmod(str(path), 0o755 if executable else 0o644)
+        return path
+
+    # vi.mode -----------------------------------------------------------------
+
+    def test_no_bridge_mode_at_all_is_a_problem(self):
+        ctx = context(vi=FakeVoiceInk(modes=(paste_mode(),)))
+        finding = registry._check_vi_mode(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("macrovoice.sh", finding.detail)
+
+    def test_a_bridge_mode_is_ok_and_names_it(self):
+        ctx = context(vi=FakeVoiceInk(modes=(paste_mode(), vi_mode())))
+        finding = registry._check_vi_mode(ctx)
+        self.assertIs(finding.outcome, Outcome.OK)
+        self.assertIn("macrovoice", finding.detail)
+
+    def test_an_unreadable_store_is_unknown_not_a_problem(self):
+        # Accusing a machine we could not read is the failure mode doctor exists
+        # to avoid: it reads as "the bridge is broken" when nothing is.
+        ctx = context(vi=FakeVoiceInk(modes=None))
+        self.assertIs(registry._check_vi_mode(ctx).outcome, Outcome.UNKNOWN)
+
+    def test_no_adapter_at_all_is_unknown(self):
+        ctx = context(vi=None)
+        ctx = Context(watch_root=ctx.watch_root, mw=ctx.mw, bridge=ctx.bridge, vi=None)
+        self.assertIs(registry._check_vi_mode(ctx).outcome, Outcome.UNKNOWN)
+
+    # vi.outputmode -----------------------------------------------------------
+
+    def test_a_bridge_mode_left_on_paste_is_a_problem(self):
+        # The command is stored but VoiceInk never invokes it, so the text just
+        # pastes and the user concludes the bridge does not work.
+        ctx = context(vi=FakeVoiceInk(modes=(vi_mode(output_mode="paste"),)))
+        finding = registry._check_vi_outputmode(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("customCommand", finding.detail)
+
+    def test_custom_command_output_is_ok(self):
+        ctx = context(vi=FakeVoiceInk(modes=(vi_mode(),)))
+        self.assertIs(registry._check_vi_outputmode(ctx).outcome, Outcome.OK)
+
+    # vi.command --------------------------------------------------------------
+
+    def test_a_command_pointing_at_a_missing_script_is_a_problem(self):
+        ctx = context(vi=FakeVoiceInk(modes=(vi_mode(command="/gone/macrovoice.sh --mode x"),)))
+        finding = registry._check_vi_command(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("does not exist", finding.detail)
+
+    def test_a_relative_command_path_is_a_problem(self):
+        # VoiceInk runs the command with cwd=/, so a relative path cannot work.
+        ctx = context(vi=FakeVoiceInk(modes=(vi_mode(command="macrovoice.sh --mode x"),)))
+        finding = registry._check_vi_command(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("absolute", finding.detail)
+
+    def test_a_non_executable_script_is_a_problem(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.script(tmp, executable=False)
+            ctx = context(
+                vi=FakeVoiceInk(modes=(vi_mode(command="%s --mode x" % path),)),
+                bridge=FakeBridge(script=path),
+            )
+            finding = registry._check_vi_command(ctx)
+            self.assertIs(finding.outcome, Outcome.PROBLEM)
+            self.assertIn("not executable", finding.detail)
+
+    def test_a_command_pointing_at_a_different_checkout_still_passes_vi_command(self):
+        """The split, found by running the thing rather than by review.
+
+        A Mode pointing at a DIFFERENT but working copy is not a broken bridge:
+        it dictates fine. Failing it here would pin exit 1 on a healthy machine
+        belonging to anyone with two copies, which is the false-alarm shape this
+        command has already been bitten by twice. vi.checkout says it at WARN.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            other = self.script(tmp, name="macrovoice.sh")
+            mine = self.script(tmp, name="the-real-one.sh")
+            ctx = context(
+                vi=FakeVoiceInk(modes=(vi_mode(command="%s --mode x" % other),)),
+                bridge=FakeBridge(script=mine),
+            )
+            self.assertIs(registry._check_vi_command(ctx).outcome, Outcome.OK)
+
+    def test_a_command_pointing_at_this_checkout_is_ok(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.script(tmp)
+            ctx = context(
+                vi=FakeVoiceInk(modes=(vi_mode(command="%s --mode x" % path),)),
+                bridge=FakeBridge(script=path),
+            )
+            self.assertIs(registry._check_vi_command(ctx).outcome, Outcome.OK)
+
+    def test_a_quoted_path_with_spaces_is_parsed_not_split(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "my folder"
+            folder.mkdir()
+            path = self.script(folder)
+            ctx = context(
+                vi=FakeVoiceInk(modes=(vi_mode(command='"%s" --mode x' % path),)),
+                bridge=FakeBridge(script=path),
+            )
+            self.assertIs(registry._check_vi_command(ctx).outcome, Outcome.OK)
+
+    # vi.checkout -------------------------------------------------------------
+
+    def test_a_different_checkout_is_a_warning_naming_both_paths(self):
+        """The 2026-08-09 hazard: the folder was renamed, a stale copy survived
+        at the old path, VoiceInk kept running it, and every edit went to a
+        checkout nothing was using. Invisible to every other check."""
+        with tempfile.TemporaryDirectory() as tmp:
+            other = self.script(tmp, name="macrovoice.sh")
+            mine = self.script(tmp, name="the-real-one.sh")
+            ctx = context(
+                vi=FakeVoiceInk(modes=(vi_mode(command="%s --mode x" % other),)),
+                bridge=FakeBridge(script=mine),
+            )
+            finding = registry._check_vi_checkout(ctx)
+            self.assertIs(finding.outcome, Outcome.PROBLEM)
+            self.assertIn(str(other), finding.detail)
+            self.assertIn(str(mine), finding.detail)
+
+    def test_the_same_checkout_is_ok(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.script(tmp)
+            ctx = context(
+                vi=FakeVoiceInk(modes=(vi_mode(command="%s --mode x" % path),)),
+                bridge=FakeBridge(script=path),
+            )
+            self.assertIs(registry._check_vi_checkout(ctx).outcome, Outcome.OK)
+
+    def test_a_missing_script_defers_to_vi_command_rather_than_double_reporting(self):
+        # vi.command already fails loudly for this. Two alarms for one cause is
+        # what makes a bare machine look like a wall of unrelated breakage.
+        ctx = context(vi=FakeVoiceInk(modes=(vi_mode(command="/gone/macrovoice.sh"),)))
+        self.assertIs(registry._check_vi_checkout(ctx).outcome, Outcome.UNKNOWN)
+
+    # vi.reachable ------------------------------------------------------------
+
+    def test_a_mode_that_is_neither_default_nor_bound_is_a_problem(self):
+        """Friction trap 1, the single most common false 'the bridge is broken'.
+
+        VoiceInk resolves the Mode per dictation: a Mode-specific shortcut wins,
+        otherwise the default is used. A Mode that is neither never runs, so
+        every dictation goes through the normal paste Mode and the command is
+        never called, which looks exactly like the bridge premise being wrong.
+        """
+        ctx = context(vi=FakeVoiceInk(modes=(vi_mode(),), shortcut=False))
+        finding = registry._check_vi_reachable(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("never runs", finding.detail)
+
+    def test_a_shortcut_bound_mode_is_ok(self):
+        ctx = context(vi=FakeVoiceInk(modes=(vi_mode(),), shortcut=True))
+        self.assertIs(registry._check_vi_reachable(ctx).outcome, Outcome.OK)
+
+    def test_a_default_mode_is_reachable_without_a_shortcut(self):
+        ctx = context(vi=FakeVoiceInk(modes=(vi_mode(is_default=True),), shortcut=False))
+        self.assertIs(registry._check_vi_reachable(ctx).outcome, Outcome.OK)
+
+    def test_an_unreadable_shortcut_is_unknown_not_a_problem(self):
+        ctx = context(vi=FakeVoiceInk(modes=(vi_mode(),), shortcut=None))
+        self.assertIs(registry._check_vi_reachable(ctx).outcome, Outcome.UNKNOWN)
+
+    # vi.escapehatch ----------------------------------------------------------
+
+    def test_the_bridge_mode_holding_default_is_a_warning(self):
+        """G4, checked continuously instead of remembered once.
+
+        If the bridge Mode is the default, every ordinary dictation depends on
+        macrowhisper being alive. When it is not, nothing pastes and there is no
+        way to dictate normally.
+        """
+        ctx = context(vi=FakeVoiceInk(
+            modes=(paste_mode(is_default=False), vi_mode(is_default=True))))
+        finding = registry._check_vi_escapehatch(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("macrowhisper", finding.detail)
+
+    def test_a_non_bridge_default_is_ok(self):
+        ctx = context(vi=FakeVoiceInk(modes=(paste_mode(is_default=True), vi_mode())))
+        finding = registry._check_vi_escapehatch(ctx)
+        self.assertIs(finding.outcome, Outcome.OK)
+        self.assertIn("Dictation", finding.detail)
+
+    def test_no_default_mode_at_all_is_a_warning(self):
+        # VoiceInk then falls back to list order, which is not something a user
+        # can reason about.
+        ctx = context(vi=FakeVoiceInk(
+            modes=(paste_mode(is_default=False), vi_mode(is_default=False))))
+        self.assertIs(registry._check_vi_escapehatch(ctx).outcome, Outcome.PROBLEM)
+
+    # unparseable commands and unreadable stores ------------------------------
+
+    def test_an_unbalanced_quote_in_the_command_is_reported_not_raised(self):
+        # shlex.split raises ValueError on an unterminated quote. A check that
+        # throws is worse than one that says what is wrong.
+        broken = '/repo/macrovoice.sh --mode "unterminated'
+        ctx = context(vi=FakeVoiceInk(modes=(vi_mode(command=broken),)))
+        finding = registry._check_vi_command(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("unparseable", finding.detail)
+
+    def test_vi_checkout_treats_an_unparseable_command_as_unknown(self):
+        broken = '/repo/macrovoice.sh --mode "unterminated'
+        ctx = context(vi=FakeVoiceInk(modes=(vi_mode(command=broken),)))
+        self.assertIs(registry._check_vi_checkout(ctx).outcome, Outcome.UNKNOWN)
+
+    def test_vi_checkout_passes_through_the_no_bridge_mode_finding(self):
+        ctx = context(vi=FakeVoiceInk(modes=(paste_mode(),)))
+        self.assertIs(registry._check_vi_checkout(ctx).outcome, Outcome.PROBLEM)
+
+    def test_escapehatch_with_no_adapter_is_unknown(self):
+        ctx = context()
+        ctx = Context(watch_root=ctx.watch_root, mw=ctx.mw, bridge=ctx.bridge, vi=None)
+        self.assertIs(registry._check_vi_escapehatch(ctx).outcome, Outcome.UNKNOWN)
+
+    def test_escapehatch_with_an_unreadable_store_is_unknown(self):
+        ctx = context(vi=FakeVoiceInk(modes=None))
+        self.assertIs(registry._check_vi_escapehatch(ctx).outcome, Outcome.UNKNOWN)
+
+    def test_an_empty_quoted_first_token_is_caught_as_not_absolute(self):
+        # shlex.split('"" macrovoice.sh') is ['', 'macrovoice.sh'], so argv[0]
+        # can be empty even though argv never is. It must not crash.
+        ctx = context(vi=FakeVoiceInk(modes=(vi_mode(command='"" macrovoice.sh'),)))
+        finding = registry._check_vi_command(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("absolute", finding.detail)
+
+    # the staleness caveat ----------------------------------------------------
+
+    def test_every_vi_fix_hint_mentions_quitting_voiceink(self):
+        """VoiceInk reads its Mode store once at launch and never re-reads, and
+        cfprefsd caches on its behalf, so an export taken while it runs can be
+        stale. Observed 2026-08-15. Without this line a user who has just fixed
+        the Mode in the UI is told it is still broken."""
+        vi = FakeVoiceInk(modes=(vi_mode(output_mode="paste", command="/gone/x.sh"),),
+                          shortcut=False, running=True)
+        ctx = context(vi=vi)
+        for check in (registry._check_vi_mode, registry._check_vi_outputmode,
+                      registry._check_vi_command, registry._check_vi_reachable):
+            finding = check(ctx)
+            if finding.outcome is Outcome.PROBLEM:
+                self.assertIn("quit VoiceInk", finding.fix_hint or "",
+                              "%s must name the staleness caveat" % check.__name__)
 
 
 class TestConfigExists(unittest.TestCase):

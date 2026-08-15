@@ -85,3 +85,8 @@ class Context:
     watch_root: Path
     mw: object
     bridge: object
+    # Defaulted so every existing construction site keeps working. A check that
+    # needs it must handle None, which is what a caller building a
+    # macrowhisper-only Context passes; the vi.* checks report UNKNOWN in that
+    # case rather than assuming VoiceInk is absent.
+    vi: object = None

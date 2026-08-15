@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .adapters.bridge import BridgeState
 from .adapters.macrowhisper import Macrowhisper
+from .adapters.voiceink import VoiceInk
 from .model import Context
 from .registry import CHECKS
 from .report import exit_code, render
@@ -54,6 +55,7 @@ def doctor_main(argv) -> int:
         watch_root=watch_root,
         mw=Macrowhisper(),
         bridge=BridgeState(watch_root),
+        vi=VoiceInk(),
     )
     results = run(CHECKS, ctx)
     sys.stdout.write(render(results))

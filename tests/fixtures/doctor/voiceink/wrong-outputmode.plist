@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Shortcut_mode_B0000000-0000-0000-0000-0000000000B1</key>
+	<data>
+	eyJraW5kIjoibW9kaWZpZXJPbmx5Iiwia2V5Q29kZSI6NjU1MzUsIm1vZGlmaWVyRmxh
+	Z3NSYXdWYWx1ZSI6NjU1MzYwfQ==
+	</data>
+	<key>modeConfigurationsV2</key>
+	<data>
+	W3siaWQiOiAiMTAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDAxIiwgIm5h
+	bWUiOiAiRGljdGF0aW9uIiwgIm91dHB1dE1vZGUiOiAicGFzdGUiLCAiaXNEZWZhdWx0
+	IjogdHJ1ZSwgImlzRW5hYmxlZCI6IHRydWUsICJzZWxlY3RlZExhbmd1YWdlIjogImF1
+	dG8iLCAiaWNvbiI6ICJtaWMifSwgeyJpZCI6ICJCMDAwMDAwMC0wMDAwLTAwMDAtMDAw
+	MC0wMDAwMDAwMDAwQjEiLCAibmFtZSI6ICJtYWNyb3ZvaWNlIiwgIm91dHB1dE1vZGUi
+	OiAicGFzdGUiLCAiaXNEZWZhdWx0IjogZmFsc2UsICJpc0VuYWJsZWQiOiB0cnVlLCAi
+	c2VsZWN0ZWRMYW5ndWFnZSI6ICJhdXRvIiwgImljb24iOiAiZG9jIiwgImN1c3RvbUNv
+	bW1hbmQiOiB7ImNvbW1hbmQiOiAiL1VzZXJzL2V4YW1wbGUvbWFjcm92b2ljZS9tYWNy
+	b3ZvaWNlLnNoIC0tbW9kZSBtYWNyb3ZvaWNlIn19XQ==
+	</data>
+	<key>someUnrelatedKey</key>
+	<string>ignored</string>
+</dict>
+</plist>

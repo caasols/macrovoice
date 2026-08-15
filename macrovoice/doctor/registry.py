@@ -5,15 +5,27 @@ Each entry is data. Adding a trap is one function and one row.
 """
 
 import os
+import shlex
 import tempfile
 from pathlib import Path
 
+from .adapters.voiceink import BUNDLE_ID as VOICEINK_BUNDLE_ID
 from .model import Check, Finding, Severity
 
 VOICEINK_APP_PATHS = (
     Path("/Applications/VoiceInk.app"),
     Path("~/Applications/VoiceInk.app").expanduser(),
 )
+# The wrapper VoiceInk is told to run. Bridge Modes are recognised by this name
+# appearing in their command, never by matching the correct path: vi.command
+# exists precisely to catch a stored path that is wrong, and it could not see a
+# wrong path if finding the Mode required a right one.
+SCRIPT_NAME = "macrovoice.sh"
+# Appended to every vi.* repair hint. VoiceInk loads its Mode store once at
+# launch and never re-reads it, and cfprefsd caches on the running app's behalf,
+# so a reading taken now can lag what the UI shows. Without this line a user who
+# has just fixed the Mode is told, wrongly, that it is still broken.
+STALE_HINT = "then quit VoiceInk and re-run doctor (it caches its Modes in memory)"
 MIN_PYTHON = (3, 9)
 BREW_INSTALL = "brew install ognistik/formulae/macrowhisper"
 # The config sample shipped at the repo root, named here so the hint and the file
@@ -371,6 +383,233 @@ def _check_clipboard_buffer(ctx):
     return Finding.ok("%.0fs" % float(value))
 
 
+def _bridge_modes(ctx):
+    """(modes, error) where `error` is a Finding to return, or None to proceed.
+
+    Every vi.* check begins here, so the "cannot read VoiceInk" and "no bridge
+    Mode" cases are answered once and identically rather than five times.
+
+    A bridge Mode is any Mode whose command mentions `macrovoice.sh`, matched on
+    the SCRIPT NAME and not on a path, because the whole point of vi.command is
+    that the stored path may be wrong. Matching on the correct path first would
+    make the dead-path check unable to see the thing it exists to find.
+    """
+    if ctx.vi is None:
+        return None, Finding.unknown("no VoiceInk adapter available")
+    modes = ctx.vi.modes()
+    if modes is None:
+        return None, Finding.unknown(
+            "could not read VoiceInk's Mode store (defaults export %s)" % VOICEINK_BUNDLE_ID
+        )
+    found = tuple(m for m in modes if m.command and SCRIPT_NAME in m.command)
+    if not found:
+        return None, Finding.problem(
+            "no VoiceInk Mode runs %s, so nothing feeds the bridge" % SCRIPT_NAME,
+            "create a Mode with Output = Custom Command pointing at %s, %s"
+            % (ctx.bridge.script_path(), STALE_HINT),
+        )
+    return found, None
+
+
+def _stale_note(ctx):
+    """VoiceInk reads its Mode store once at launch (ModeConfig.swift:288) and
+    observes nothing after, while cfprefsd caches for the running app. So a read
+    taken now can lag the UI. Measured 2026-08-15: a setting changed in the UI
+    still read as absent here minutes later."""
+    running = ctx.vi.is_running() if ctx.vi else None
+    return " (VoiceInk is running, so this reading may lag its UI)" if running else ""
+
+
+def _check_vi_mode(ctx):
+    modes, error = _bridge_modes(ctx)
+    if error:
+        return error
+    return Finding.ok(
+        "%s%s" % (", ".join(m.name for m in modes), _stale_note(ctx))
+    )
+
+
+def _check_vi_outputmode(ctx):
+    """A Mode can hold a perfectly good command and still never run it.
+
+    VoiceInk only invokes the Custom Command when outputMode is `customCommand`
+    (TranscriptionDelivery.swift:43-46). On any other setting the text pastes
+    normally and the command is never called, which is indistinguishable from
+    the bridge being broken.
+    """
+    modes, error = _bridge_modes(ctx)
+    if error:
+        return error
+    wrong = [m for m in modes if m.output_mode != "customCommand"]
+    if wrong:
+        return Finding.problem(
+            "Mode %s has Output = %s, not customCommand, so its command never runs"
+            % (", ".join(m.name for m in wrong), wrong[0].output_mode or "unset"),
+            "set Output to Custom Command in VoiceInk, %s" % STALE_HINT,
+        )
+    return Finding.ok()
+
+
+def _check_vi_command(ctx):
+    """Friction trap 10, and the hazard this project created for itself.
+
+    Renaming the repo on 2026-08-09 left VoiceInk's stored command pointing at a
+    path that no longer existed, and nothing in the repo could see it. Worse
+    than missing: if a stale copy still sits at the old path it runs happily,
+    and the user edits a checkout that is not the one in use.
+
+    VoiceInk runs the command with cwd=/ (Gate 2), so a relative path cannot
+    work either.
+    """
+    modes, error = _bridge_modes(ctx)
+    if error:
+        return error
+
+    ours = Path(ctx.bridge.script_path()).resolve()
+    for mode in modes:
+        try:
+            argv = shlex.split(mode.command)
+        except ValueError:
+            return Finding.problem(
+                "Mode %s has an unparseable command: %s" % (mode.name, mode.command),
+                "fix the command in VoiceInk, %s" % STALE_HINT,
+            )
+        # argv cannot be empty: _bridge_modes only yields Modes whose command
+        # CONTAINS the script name, and shlex.split returns [] only for a string
+        # that is entirely whitespace. argv[0] can still be "" (a command opening
+        # with an empty quoted token), which the absolute-path branch below
+        # rejects with the right message.
+        script = argv[0]
+        if not script.startswith("/"):
+            return Finding.problem(
+                "Mode %s runs %r, which is not an absolute path. VoiceInk runs the "
+                "command with cwd=/, so a relative path cannot resolve"
+                % (mode.name, script),
+                "use the full path %s, %s" % (ours, STALE_HINT),
+            )
+        path = Path(script)
+        if not path.exists():
+            return Finding.problem(
+                "Mode %s points at %s, which does not exist" % (mode.name, script),
+                "update the command to %s, %s" % (ours, STALE_HINT),
+            )
+        if not os.access(script, os.X_OK):
+            return Finding.problem(
+                "Mode %s points at %s, which is not executable" % (mode.name, script),
+                "chmod +x %s" % script,
+            )
+    return Finding.ok("%s%s" % (argv[0], _stale_note(ctx)))
+
+
+def _check_vi_checkout(ctx):
+    """Whether VoiceInk runs the copy of macrovoice you are inspecting.
+
+    Split out of vi.command, at WARN rather than FAIL, after running the thing:
+    a Mode pointing at a DIFFERENT but perfectly working copy is not a broken
+    bridge. Anyone with two copies, a developer in a worktree or a user who
+    moved the folder and kept the old one, has a setup that dictates fine, and
+    failing them would pin exit 1 on a healthy machine. That is the false-alarm
+    shape this project has already been bitten by twice in this same command.
+
+    It still deserves saying, because it is the 2026-08-09 hazard: the folder was
+    renamed, a stale copy survived at the old path, VoiceInk kept running it, and
+    every edit went to a checkout nothing was using. Silent, and invisible to
+    every other check. The genuinely fatal cases, a path that is missing, not
+    absolute, or not executable, stay in vi.command at FAIL.
+    """
+    modes, error = _bridge_modes(ctx)
+    if error:
+        return error
+    ours = Path(ctx.bridge.script_path()).resolve()
+    for mode in modes:
+        try:
+            argv = shlex.split(mode.command)
+        except ValueError:
+            return Finding.unknown("Mode %s has an unparseable command" % mode.name)
+        theirs = Path(argv[0])  # non-empty by the same invariant as vi.command
+        if not theirs.exists():
+            # vi.command owns this failure and reports it properly.
+            return Finding.unknown("blocked: %s does not exist" % argv[0])
+        if theirs.resolve() != ours:
+            return Finding.problem(
+                "VoiceInk runs %s, but doctor is inspecting %s. The bridge may work "
+                "fine; the point is that edits here do not reach what VoiceInk runs"
+                % (theirs.resolve(), ours),
+                "point the Mode at %s, or re-run doctor from %s, %s"
+                % (ours, theirs.resolve().parent, STALE_HINT),
+            )
+    return Finding.ok()
+
+
+def _check_vi_reachable(ctx):
+    """Friction trap 1: a saved Mode that never runs.
+
+    VoiceInk resolves the Mode per dictation in
+    ActiveWindowService.beginApplyingConfiguration (:19-46): a Mode-specific
+    shortcut wins outright, otherwise the generic hotkey resolves an app rule or
+    the Mode marked default. A Mode that is neither default nor shortcut-bound
+    is never selected, so every dictation goes through the normal paste Mode and
+    the command is never called.
+
+    That presents as "VoiceInk does not suppress the paste, so this cannot
+    work", which is the honest conclusion from the symptom and is wrong. It cost
+    this project its first Gate 2 attempt.
+
+    The shortcut is a separate defaults key, not a field of the Mode, so this
+    cannot be answered by reading the Mode alone.
+    """
+    modes, error = _bridge_modes(ctx)
+    if error:
+        return error
+    for mode in modes:
+        if mode.is_default:
+            continue
+        bound = ctx.vi.has_shortcut(mode.id)
+        if bound is None:
+            return Finding.unknown(
+                "could not read whether Mode %s has a keyboard shortcut" % mode.name
+            )
+        if not bound:
+            return Finding.problem(
+                "Mode %s is neither the default nor shortcut-bound, so it never runs "
+                "and every dictation goes through your normal Mode instead" % mode.name,
+                "give it a keyboard shortcut in VoiceInk, or set it as default, %s"
+                % STALE_HINT,
+            )
+    return Finding.ok()
+
+
+def _check_vi_escapehatch(ctx):
+    """G4, enforced continuously instead of remembered once.
+
+    If the bridge Mode holds default, every ordinary dictation depends on
+    macrowhisper being alive: when it is not, nothing pastes and there is no way
+    to dictate normally. The recommended layout keeps an everyday paste Mode as
+    default and gives the bridge its own shortcut.
+    """
+    if ctx.vi is None:
+        return Finding.unknown("no VoiceInk adapter available")
+    modes = ctx.vi.modes()
+    if modes is None:
+        return Finding.unknown("could not read VoiceInk's Mode store")
+    defaults = [m for m in modes if m.is_default]
+    if not defaults:
+        return Finding.problem(
+            "no VoiceInk Mode is set as default, so VoiceInk falls back to list "
+            "order, which is not something you can reason about",
+            "set your everyday dictation Mode as default in VoiceInk",
+        )
+    non_bridge = [m for m in defaults if not (m.command and SCRIPT_NAME in m.command)]
+    if not non_bridge:
+        return Finding.problem(
+            "the bridge Mode %s is your default, so every dictation depends on "
+            "macrowhisper running. If it stops, nothing pastes at all"
+            % defaults[0].name,
+            "set a plain paste Mode as default and give the bridge its own shortcut",
+        )
+    return Finding.ok("%s holds default" % ", ".join(m.name for m in non_bridge))
+
+
 def _check_accessibility(ctx):
     """Friction trap 4: macrowhisper checks and logs Accessibility exactly once
     per process, unconditionally, at true process startup
@@ -560,6 +799,51 @@ CHECKS = (
         severity=Severity.FAIL,
         inspect=_check_accessibility,
         depends_on=("mw.running",),
+    ),
+    # VoiceInk, stage 2. Read-only. Ordered so the broadest failure comes first
+    # and the rest depend on it, which keeps a machine with no bridge Mode from
+    # emitting four separate alarms about the same missing thing.
+    Check(
+        id="vi.mode",
+        title="a VoiceInk Mode runs macrovoice",
+        severity=Severity.FAIL,
+        inspect=_check_vi_mode,
+        depends_on=("pre.voiceink",),
+    ),
+    Check(
+        id="vi.outputmode",
+        title="that Mode's output is Custom Command",
+        severity=Severity.FAIL,
+        inspect=_check_vi_outputmode,
+        depends_on=("vi.mode",),
+    ),
+    Check(
+        id="vi.command",
+        title="its command points at this macrovoice.sh",
+        severity=Severity.FAIL,
+        inspect=_check_vi_command,
+        depends_on=("vi.mode",),
+    ),
+    Check(
+        id="vi.checkout",
+        title="VoiceInk runs the copy you are inspecting",
+        severity=Severity.WARN,
+        inspect=_check_vi_checkout,
+        depends_on=("vi.command",),
+    ),
+    Check(
+        id="vi.reachable",
+        title="that Mode is default or shortcut-bound",
+        severity=Severity.FAIL,
+        inspect=_check_vi_reachable,
+        depends_on=("vi.mode",),
+    ),
+    Check(
+        id="vi.escapehatch",
+        title="a non-bridge Mode holds default",
+        severity=Severity.WARN,
+        inspect=_check_vi_escapehatch,
+        depends_on=("pre.voiceink",),
     ),
     Check(
         id="bridge.spool",

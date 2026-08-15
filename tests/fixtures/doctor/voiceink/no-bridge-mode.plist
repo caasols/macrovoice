@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>modeConfigurationsV2</key>
+	<data>
+	W3siaWQiOiAiMTAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDAxIiwgIm5h
+	bWUiOiAiRGljdGF0aW9uIiwgIm91dHB1dE1vZGUiOiAicGFzdGUiLCAiaXNEZWZhdWx0
+	IjogdHJ1ZSwgImlzRW5hYmxlZCI6IHRydWUsICJzZWxlY3RlZExhbmd1YWdlIjogImF1
+	dG8iLCAiaWNvbiI6ICJtaWMifV0=
+	</data>
+	<key>someUnrelatedKey</key>
+	<string>ignored</string>
+</dict>
+</plist>
