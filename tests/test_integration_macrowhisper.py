@@ -23,9 +23,11 @@ Safety, since this drives a system-wide tool:
   * The daemon is started per-test and killed in cleanup.
 """
 
+import atexit
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -171,6 +173,69 @@ def _restore_original_config():
         )
 
 
+_SAFETY_NET_ARMED = False
+
+
+def _arm_interrupt_safety_net():
+    """Restore the config path even when the run is KILLED rather than finished.
+
+    `addCleanup` covers a passing test and `tearDownModule` covers a failing run.
+    Neither runs on a signal, and this file's own docstring has listed "crash,
+    SIGTERM, kill before tearDownModule" as a leak cause since 2026-08-06 while
+    defending against it only after the fact, by detecting the leak on the NEXT
+    run. That backstop is good and stays; it is a poor primary defence because
+    "the next run" can be days away.
+
+    It bit for real on 2026-08-15: a run was interrupted partway through, leaving
+    macrowhisper's persisted path at a temp config that was then deleted. Because
+    macrowhisper defaults `simEsc` to TRUE and `moveTo` to empty, the machine was
+    left posting an Escape into whatever app had focus, which is the one setting
+    this project treats as destructive. `doctor` caught it, which is what it is
+    for, but nothing should have needed catching.
+
+    Armed lazily, from `_start_daemon`, so the blast radius is exactly the moment
+    the risk is created: a default run that skips these tests never installs a
+    handler and never shells out to macrowhisper.
+
+    Both mechanisms are used because neither covers the other's cases. `atexit`
+    handles a normal unwind, `sys.exit`, an unhandled exception, and a
+    KeyboardInterrupt that propagates; it does NOT run when the process is
+    terminated by a signal. The handlers cover that. Double-restoring is
+    harmless: `_restore_original_config` is idempotent by construction.
+    """
+    global _SAFETY_NET_ARMED
+    if _SAFETY_NET_ARMED or not (MACROWHISPER and ENABLED):
+        return
+    _SAFETY_NET_ARMED = True
+
+    atexit.register(_restore_original_config)
+
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        try:
+            previous = signal.getsignal(sig)
+        except (ValueError, OSError, AttributeError):  # pragma: no cover
+            continue
+
+        def _handler(signum, frame, _previous=previous):
+            # Restore FIRST. Whatever we delegate to may not come back.
+            _restore_original_config()
+            if callable(_previous):
+                # unittest installs its own SIGINT handler for graceful stop, and
+                # Python's default_int_handler raises KeyboardInterrupt. Chaining
+                # preserves both rather than replacing them.
+                _previous(signum, frame)
+                return
+            # SIG_DFL or SIG_IGN: an int, not a function. Re-raise with the
+            # default disposition so the process dies the way the caller asked.
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+
+        try:
+            signal.signal(sig, _handler)
+        except (ValueError, OSError):  # pragma: no cover - not on the main thread
+            pass
+
+
 def tearDownModule():
     """Last line of defence, and the one that makes a leak impossible to miss.
 
@@ -267,6 +332,9 @@ class RealMacrowhisperTestCase(unittest.TestCase):
         self.addCleanup(_restore_original_config)
 
     def _start_daemon(self):
+        # Arm BEFORE the daemon persists the temp path, not after: the window
+        # between the two is exactly what an interrupt exploits.
+        _arm_interrupt_safety_net()
         proc = subprocess.Popen(
             [MACROWHISPER, "--config", str(self.config_path)],
             stdout=subprocess.PIPE,

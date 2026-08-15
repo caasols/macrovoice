@@ -22,15 +22,122 @@ sane", and that is a pure decision worth testing on its own.
 """
 
 import sys
+import signal
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import test_integration_macrowhisper as harness  # noqa: E402
 from test_integration_macrowhisper import (  # noqa: E402
     looks_like_leaked_temp_path,
     resolve_original_config,
 )
+
+
+class TestInterruptSafetyNet(unittest.TestCase):
+    """The gap that bit on 2026-08-15, and the one this file's own docstring
+    already named as a leak cause without defending against it.
+
+    `addCleanup` covers a passing test, `tearDownModule` covers a failing run.
+    Neither runs when the process is SIGNALLED. An interrupted integration run
+    therefore leaves macrowhisper's persisted config path pointing at a temp
+    directory that is then deleted, and since `simEsc` defaults to TRUE and
+    `moveTo` to empty, the user is left in the exact state that posts an Escape
+    into whatever app they are typing in.
+
+    Detection already existed: the next run notices the leak and resets. That is
+    a good backstop and a bad primary defence, because "the next run" may be days
+    away. These tests cover PREVENTION.
+
+    Everything here is exercised with fakes. Nothing installs a real handler that
+    outlives the test, and no signal is ever raised at the test runner.
+    """
+
+    def setUp(self):
+        self.installed = {}
+        self.registered = []
+        self.restores = 0
+
+        def fake_signal(signum, handler):
+            previous = self.installed.get(signum, signal.SIG_DFL)
+            self.installed[signum] = handler
+            return previous
+
+        def fake_getsignal(signum):
+            return self.installed.get(signum, signal.SIG_DFL)
+
+        def fake_restore():
+            self.restores += 1
+
+        # Patch the module's own references, so no real handler is ever installed
+        # and the real macrowhisper is never invoked.
+        patches = [
+            mock.patch.object(harness, "MACROWHISPER", "/usr/bin/true"),
+            mock.patch.object(harness, "ENABLED", True),
+            mock.patch.object(harness, "_SAFETY_NET_ARMED", False),
+            mock.patch.object(harness.signal, "signal", fake_signal),
+            mock.patch.object(harness.signal, "getsignal", fake_getsignal),
+            mock.patch.object(harness.atexit, "register", self.registered.append),
+            mock.patch.object(harness, "_restore_original_config", fake_restore),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_arming_installs_a_handler_for_the_signals_that_kill_a_test_run(self):
+        harness._arm_interrupt_safety_net()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            self.assertIn(sig, self.installed, "no handler installed for %r" % sig)
+            self.assertTrue(callable(self.installed[sig]))
+
+    def test_arming_also_registers_an_atexit_hook(self):
+        # Covers the paths a signal handler cannot: sys.exit, an unhandled
+        # exception, and a KeyboardInterrupt that unwinds normally.
+        harness._arm_interrupt_safety_net()
+        self.assertEqual(len(self.registered), 1)
+
+    def test_arming_twice_installs_once(self):
+        # _start_daemon runs per test, so this is called repeatedly in a normal
+        # run. Re-arming would stack handlers and re-wrap our own wrapper.
+        harness._arm_interrupt_safety_net()
+        harness._arm_interrupt_safety_net()
+        harness._arm_interrupt_safety_net()
+        self.assertEqual(len(self.registered), 1)
+
+    def test_it_does_nothing_when_the_integration_suite_is_disabled(self):
+        # The default run must not touch signal handlers or shell out to
+        # macrowhisper at all.
+        with mock.patch.object(harness, "ENABLED", False):
+            with mock.patch.object(harness, "_SAFETY_NET_ARMED", False):
+                harness._arm_interrupt_safety_net()
+        self.assertEqual(self.installed, {})
+        self.assertEqual(self.registered, [])
+
+    def test_the_handler_restores_the_config_before_anything_else(self):
+        harness._arm_interrupt_safety_net()
+        delegated = []
+        # Stand in for whatever unittest or the shell had installed first.
+        self.installed[signal.SIGINT] = None
+        harness._SAFETY_NET_ARMED = False
+        with mock.patch.object(harness.signal, "getsignal",
+                               lambda s: (lambda *a: delegated.append(s))):
+            harness._arm_interrupt_safety_net()
+        self.installed[signal.SIGINT](signal.SIGINT, None)
+        self.assertEqual(self.restores, 1, "the config was not restored")
+        self.assertEqual(delegated, [signal.SIGINT], "previous handler not called")
+
+    def test_a_previous_handler_that_is_not_callable_is_not_invoked(self):
+        # SIGTERM's default disposition is SIG_DFL, an int, not a function.
+        # Calling it would raise inside a signal handler.
+        harness._arm_interrupt_safety_net()
+        killed = []
+        with mock.patch.object(harness.os, "kill", lambda pid, sig: killed.append(sig)):
+            self.installed[signal.SIGTERM](signal.SIGTERM, None)
+        self.assertEqual(self.restores, 1)
+        self.assertEqual(killed, [signal.SIGTERM],
+                         "should re-raise with the default disposition")
 
 
 class TestRealUserPathsAreNeverRejected(unittest.TestCase):
