@@ -399,13 +399,30 @@ def _check_accessibility(ctx):
     across two full rotations still lands here. It stays FAIL-severity UNKNOWN
     and still exits 2, deliberately: a genuinely denied permission must not be
     downgraded to a note.
+
+    And a THIRD cause, found live on 2026-08-15 the same way, by running the
+    thing rather than re-reading the notes: the log file can be DELETED or
+    truncated underneath a running daemon. macrowhisper recreates it on its
+    next write, so the file is present, readable, small, and missing the
+    startup line, with no rotated backup to fall back to because no rotation
+    happened. Measured: a daemon up 1d14h whose live log was 3.9KB and began
+    that same afternoon, five orders of magnitude below the 5MB threshold.
+
+    Rotation and deletion are indistinguishable from inside this check, and
+    deliberately so: the fallback recovers a line that was rotated away, and
+    nothing can recover one that was deleted. The detail string therefore names
+    the whole cause set rather than asserting the one that happens to be
+    likeliest, because naming only rotation made a healthy machine's exit 2
+    look like a defect in doctor. The remedy is the same for all three.
     """
     granted, _when = ctx.mw.accessibility_state()
     if granted is None:
         return Finding.unknown(
-            "no Accessibility line in the live or rotated log; macrowhisper has "
-            "rotated past its own startup line, or its log is unreadable, so "
-            "run macrowhisper --restart-service to re-log it"
+            "no Accessibility line in the live or rotated log. macrowhisper writes "
+            "one only at startup, so its log no longer holds that line: it has "
+            "rotated past it, the log was deleted or truncated under the running "
+            "daemon, or it is unreadable. This is not a permission failure and not "
+            "a doctor defect; run macrowhisper --restart-service to re-log it"
         )
     if not granted:
         return Finding.problem(

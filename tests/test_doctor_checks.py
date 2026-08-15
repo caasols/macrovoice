@@ -479,15 +479,32 @@ class TestAccessibility(unittest.TestCase):
         ctx = context(mw=FakeMacrowhisper(accessibility=(None, None)))
         self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.UNKNOWN)
 
-    def test_the_unknown_says_the_log_rotated_and_how_to_refresh_it(self):
-        # The message must not read as a doctor defect. macrowhisper rotates
-        # at 5MB keeping one backup, so a long-running daemon's startup line
-        # can age out of retention entirely. Restarting it re-logs the line.
+    def test_the_unknown_names_every_cause_and_how_to_refresh_it(self):
+        # The message must not read as a doctor defect. There are THREE ways
+        # the startup line can be absent, and the check cannot tell them apart
+        # from the inside, so it must name the set rather than assert one:
+        #   1. rotated past  (5MB, one backup: Logger.swift:18, :22)
+        #   2. deleted or truncated under the running daemon, which leaves the
+        #      file present, small and backup-less. Measured live 2026-08-15.
+        #   3. unreadable
+        # Naming only rotation made a healthy machine's exit 2 look like a bug
+        # in doctor, which is the exact misdiagnosis this whole tool exists to
+        # prevent. The remedy is the same for all three.
         ctx = context(mw=FakeMacrowhisper(accessibility=(None, None)))
         finding = registry._check_accessibility(ctx)
         self.assertIs(finding.outcome, Outcome.UNKNOWN)
         self.assertIn("rotated", finding.detail)
+        self.assertIn("deleted", finding.detail)
+        self.assertIn("unreadable", finding.detail)
         self.assertIn("--restart-service", finding.detail)
+
+    def test_the_unknown_disclaims_being_a_permission_failure(self):
+        # UNKNOWN is FAIL-severity and pins the exit code at 2, so the one
+        # thing the text must not do is let a reader conclude the permission
+        # was denied. Denial is a separate outcome with a separate message.
+        ctx = context(mw=FakeMacrowhisper(accessibility=(None, None)))
+        detail = registry._check_accessibility(ctx).detail
+        self.assertIn("not a permission failure", detail)
 
     def test_granted_is_ok_no_matter_how_old_the_line_is(self):
         # Regression for the false FAIL-severity UNKNOWN found live: a grant

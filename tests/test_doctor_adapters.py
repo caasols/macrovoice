@@ -441,6 +441,17 @@ class TestAccessibilityLogEdges(unittest.TestCase):
             )
 
     def test_no_rotated_log_at_all_is_unknown(self):
+        # This exact shape, a readable live log with no Accessibility line and
+        # no backup beside it, is what a DELETED log looks like from here, and
+        # it was hit live on 2026-08-15: a daemon up 1d14h whose log had been
+        # removed underneath it and recreated at 3.9KB on the next write. There
+        # is no backup because nothing rotated, so the fallback has nothing to
+        # read and the verdict is genuinely unrecoverable. Distinguishing this
+        # from rotation is not possible here and not attempted; the check's
+        # detail string names both causes instead. Do not "fix" this into a
+        # guess by comparing the file's age against a daemon start time derived
+        # from ps: that is the indicator-trusting mistake this project keeps
+        # finding, and it was already rejected once for this same check.
         with TemporaryDirectory() as tmp:
             path = self.write(tmp, "[2026-08-10 19:00:00] [DEBUG] nothing relevant here\n")
             self.assertEqual(
