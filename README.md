@@ -183,8 +183,20 @@ paste bug in one app rather than a global setting doing collateral damage.
 ./macrovoice.sh doctor --check
 ```
 
-Twenty checks across both apps, reported in the order you hit them. It is read-only: it never
-creates a directory, edits a config, or touches VoiceInk.
+Twenty-five checks across both apps, reported in the order you hit them. It is read-only: it never
+creates a directory, edits a config, or writes to VoiceInk.
+
+Six of them inspect the VoiceInk half, which is where the traps that look most like "the bridge
+is broken" actually live. The important one is `vi.reachable`: a Custom Command Mode that is
+neither the default nor shortcut-bound is **never selected**, so your command is simply never
+called and every dictation pastes as usual. That reads exactly like the bridge premise being
+wrong, and is not. `vi.command` catches a Mode still pointing at a folder you have since moved
+or renamed, and `vi.checkout` warns when VoiceInk is running a *different* copy of `macrovoice`
+than the one you are editing.
+
+Because VoiceInk loads its Modes once at launch and never re-reads them, a reading taken while it
+is running can lag what its window shows. Every VoiceInk repair hint therefore ends by telling you
+to quit VoiceInk and re-run, and the report says so when VoiceInk is up.
 
 Three outcomes, and the third one matters. `ok` and `PROBLEM` mean what you expect. `unknown`
 means a check could not be run, and it names what blocked it: if macrowhisper is not running,
@@ -268,14 +280,14 @@ delivered, and a 633-character dictation arrived intact.
 
 ## Tests
 
-375 tests, 8 skipped: 187 on the delivery path, 188 for `doctor`. Total branch coverage is 99%
-(99.12%), measured across the whole package with subprocess tracing. That last part matters: a
+434 tests, 8 skipped: 193 on the delivery path, 241 for `doctor`. Total branch coverage is 99%
+(99.34%), measured across the whole package with subprocess tracing. That last part matters: a
 naive run reports `cli.py` at 0%, which is wrong, because its tests drive it as a real subprocess
 that `coverage` cannot see without `COVERAGE_PROCESS_START` and a `sitecustomize.py`. Every
 delivery-path module (`transcript.py`, `meta.py`, `publisher.py`, `cli.py`) is at 100%, and so is
 most of `doctor`: `model.py`, `registry.py`, `runner.py`, `report.py`, and `process.py`. What is
 left uncovered: `__main__.py`'s entry-point guard, two loop branches in the bridge adapter, and
-five spots in the macrowhisper adapter, none reachable without a real daemon. CI runs the suite on
+four spots in the macrowhisper adapter, none reachable without a real daemon. CI runs the suite on
 macOS across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice.sh` execs
 `/usr/bin/env python3`, and on a stock Mac that is the system Python.
 
@@ -290,10 +302,10 @@ macOS across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice
 | `tests/test_sample_config.py` | 9 | The shipped `macrowhisper.sample.json`: structure, and the settings that cause harm when wrong |
 | `tests/test_voiceink_invocation.py` | 8 | The `.sh` wrappers through `/bin/zsh -lc`, exactly as VoiceInk calls them |
 | `tests/test_integration_macrowhisper.py` | 8 | Opt-in; drives a **real macrowhisper daemon** |
-| `tests/test_doctor_*.py` (8 files) | 188 | `doctor`'s checks, adapters, runner, report and status parser, exercised without a real macrowhisper |
+| `tests/test_doctor_*.py` (9 files) | 241 | `doctor`'s checks, adapters, runner, report and status parser, exercised without a real macrowhisper |
 
 ```sh
-python3 -m unittest discover -s tests -t tests -v      # 375 tests, 8 skipped
+python3 -m unittest discover -s tests -t tests -v      # 434 tests, 8 skipped
 MACROVOICE_INTEGRATION=1 python3 -m unittest discover -s tests -t tests
 ```
 
@@ -448,7 +460,7 @@ resolve at action time.
 
 ## Troubleshooting
 
-**Start with `./macrovoice.sh doctor --check`.** Seven of the thirteen setup traps this project
+**Start with `./macrovoice.sh doctor --check`.** Nine of the thirteen setup traps this project
 has hit in practice are detected there, including the three that silently look like the bridge
 being broken.
 
