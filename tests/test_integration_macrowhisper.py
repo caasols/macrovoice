@@ -536,5 +536,139 @@ class ConcurrentPublishRegressionTest(RealMacrowhisperTestCase):
         )
 
 
+class XmlPlaceholderFallbackTest(RealMacrowhisperTestCase):
+    """F5: `{{xml:tag}}` extracts, but `{{swResult}}` keeps the raw markup.
+
+    This asymmetry is specific to the bridge and cannot be hit upstream. In
+    Placeholders.swift:1759-1780, processAllPlaceholders branches on which field
+    carries the text:
+
+        if llmResult non-empty:                       <- Superwhisper with an LLM
+            let (cleaned, tags) = processXmlPlaceholders(...)
+            updatedMetaJson["llmResult"] = cleaned     <- cleaned text written BACK
+        else if result non-empty:                     <- ALWAYS the bridge
+            let (_, tags) = processXmlPlaceholders(...)
+            ...                                        <- cleaned text DISCARDED
+
+    The bridge deliberately never sets llmResult (setting it would flip
+    macrowhisper's validation gate to require a non-empty llmResult, which we
+    cannot honestly supply), so the second branch is the only one we ever take.
+    The tag content still reaches {{xml:note}}, but {{swResult}} is read from
+    metaJson["result"] (RecordingsFolderWatcher.swift:868,
+    `llmResult ?? result ?? ""`), which was never updated, so the markup
+    survives into it.
+
+    Verified against the source AND live here, because it was previously a
+    code-reasoned claim about someone else's code, and this project's own
+    history is a list of code-reasoned claims that turned out wrong.
+    """
+
+    TAG_TEXT = "buy milk"
+    TRANSCRIPT = "before <note>%s</note> after" % TAG_TEXT
+
+    def _config(self):
+        config = super()._config()
+        # Both placeholders in ONE action. The extraction path only runs at all
+        # when the action requests a tag (processXmlPlaceholders returns early
+        # on an empty requestedTags), so {{swResult}} alone would prove nothing.
+        config["scriptsShell"]["markerLog"]["action"] = (
+            "printf 'TAG=%s|SW=%s\\n' '{{xml:note}}' '{{swResult}}' >> "
+            + str(self.fired_log)
+        )
+        return config
+
+    def test_xml_tag_is_extracted_but_swresult_keeps_the_markup(self):
+        result = self.run_macrovoice(self.TRANSCRIPT)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        lines = self.wait_for_fires(1)
+        self.assertTrue(lines, "macrowhisper never fired.\n%s" % self._daemon_output())
+        line = lines[0]
+
+        tag_part, _, sw_part = line.partition("|SW=")
+        tag = tag_part.replace("TAG=", "", 1)
+
+        self.assertEqual(
+            tag, self.TAG_TEXT,
+            "the tag content should be extracted cleanly into {{xml:note}}. got: %r" % line,
+        )
+        self.assertIn(
+            "<note>", sw_part,
+            "REGRESSION OR UPSTREAM FIX: {{swResult}} no longer carries the raw "
+            "markup. If macrowhisper started writing the cleaned text back to "
+            "`result` as well as `llmResult`, this trap is gone and the README "
+            "section documenting it must be removed. got: %r" % line,
+        )
+        self.assertIn(self.TAG_TEXT, sw_part, "got: %r" % line)
+
+
+class PresetSearchTriggerTest(RealMacrowhisperTestCase):
+    """N3: the preset searches we ship must actually route to their own action.
+
+    The trigger strings come from the SHIPPED macrowhisper.sample.json rather
+    than being restated here, so this fails if the file drifts. Each url action
+    is rebuilt as a SHELL action carrying the same triggerVoice, because the real
+    ones open a browser and a test suite must not. What is under test is
+    macrowhisper's trigger SELECTION, which is the subtle part; the URL strings
+    themselves are covered by tests/test_sample_config.py.
+
+    The subtlety being pinned: triggers are prefix-anchored per alternative
+    (TriggerEvaluator.swift:205 builds "^(?i)" + escaped pattern), so a bare
+    "youtube" alternative does NOT match "ask youtube best pizza". Shipping only
+    the bare word would leave every preset silently falling through to the
+    default action, which is the failure shape this project keeps meeting.
+    """
+
+    SAMPLE_URLS = json.loads(
+        (REPO_ROOT / "macrowhisper.sample.json").read_text(encoding="utf-8")
+    )["urls"]
+
+    def _config(self):
+        config = super()._config()
+        for name, action in self.SAMPLE_URLS.items():
+            config["scriptsShell"][name] = {
+                "action": (
+                    "printf 'ROUTED=" + name + "|TEXT=%s\\n' "
+                    "'{{swResult}}' >> " + str(self.fired_log)
+                ),
+                "triggerVoice": action["triggerVoice"],
+                "scriptAsync": False,
+            }
+        return config
+
+    def test_each_preset_trigger_routes_to_its_own_action(self):
+        expected = []
+        for index, name in enumerate(self.SAMPLE_URLS):
+            phrase = "ask %s best pizza in madrid" % name
+            result = self.run_macrovoice(phrase)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            expected.append(name)
+            lines = self.wait_for_fires(index + 1)
+            self.assertGreaterEqual(
+                len(lines), index + 1,
+                "'%s' produced no action.\nlines so far: %s\ndaemon:\n%s"
+                % (phrase, lines, self._daemon_output()),
+            )
+
+        lines = self.wait_for_fires(len(expected))
+        routed = [l.split("|")[0].replace("ROUTED=", "", 1) for l in lines]
+        self.assertEqual(
+            routed, expected,
+            "each 'ask <name> ...' must route to that name's action. got:\n%s"
+            % "\n".join(lines),
+        )
+
+    def test_the_trigger_phrase_is_stripped_from_the_text(self):
+        """macrowhisper removes the matched trigger and capitalises the rest, so
+        the search query must not contain the words 'ask youtube'. If it did,
+        every preset would search for its own trigger phrase."""
+        self.run_macrovoice("ask youtube best pizza in madrid")
+        lines = self.wait_for_fires(1)
+        self.assertTrue(lines, self._daemon_output())
+        text = lines[0].split("TEXT=", 1)[1]
+        self.assertNotIn("ask youtube", text.lower(), "trigger not stripped: %r" % lines[0])
+        self.assertIn("best pizza in madrid", text.lower(), "got: %r" % lines[0])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -27,7 +27,28 @@
     "window, so the ESC goes straight into whatever app you are typing in. Measured",
     "2026-08-08: dictating into a ProtonMail compose window CLOSED THE DRAFT, and the",
     "paste then had nowhere to land. Any app where ESC means cancel, close, or discard",
-    "is exposed. Leave this false."
+    "is exposed. Leave this false.",
+    "",
+    "The url actions below are voice-triggered, and voice triggers are PREFIX-ANCHORED:",
+    "macrowhisper builds '^(?i)' + the escaped pattern (TriggerEvaluator.swift:205), so",
+    "the phrase must be the FIRST thing in the dictation. '|' separates alternatives and",
+    "each is anchored independently, which is why every entry lists both 'ask <site>' and",
+    "the bare word: with only the bare word, the natural 'ask youtube best pizza' would",
+    "not match and would fall through to the default action with no error at all.",
+    "",
+    "Matching is a raw prefix, not a word boundary, so 'googled' also fires 'google' and",
+    "searches for the leftover 'd the answer'. Use a '==regex==' trigger if that matters,",
+    "remembering that raw regex disables the automatic prefix stripping.",
+    "",
+    "URL actions get URL-encoding applied to {{swResult}} automatically, so spaces and",
+    "punctuation in a dictation are safe there.",
+    "",
+    "NOTE ON THESE COMMENT BLOCKS: a '_comment' key is only safe at the TOP LEVEL or",
+    "INSIDE an individual action object. Do NOT add one as a key of 'inserts', 'urls',",
+    "'shortcuts', 'scriptsShell' or 'scriptsAS': those decode as [String: Action]",
+    "(AppConfiguration.swift:980), so a comment key there fails to decode and takes the",
+    "WHOLE config down with it. Unknown keys inside an action object are ignored, which",
+    "is why markerLog's own _comment below is fine."
   ],
 
   "defaults": {
@@ -51,6 +72,21 @@
     "google": {
       "action": "https://www.google.com/search?q={{swResult}}",
       "triggerVoice": "ask google|google",
+      "openBackground": false
+    },
+    "youtube": {
+      "action": "https://www.youtube.com/results?search_query={{swResult}}",
+      "triggerVoice": "ask youtube|youtube",
+      "openBackground": false
+    },
+    "perplexity": {
+      "action": "https://www.perplexity.ai/search?q={{swResult}}",
+      "triggerVoice": "ask perplexity|perplexity",
+      "openBackground": false
+    },
+    "openai": {
+      "action": "https://chatgpt.com/?q={{swResult}}",
+      "triggerVoice": "ask openai|openai|ask chatgpt|chatgpt",
       "openBackground": false
     }
   },
