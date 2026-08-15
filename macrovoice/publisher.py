@@ -243,7 +243,7 @@ class Publisher:
             return ""
         return max(names) if names else ""
 
-    def _next_publish_name(self) -> str:
+    def _next_publish_name(self) -> Optional[str]:
         """Mint the name a folder will carry inside recordings/.
 
         This MUST be generated at publish time rather than at stage time, and MUST
