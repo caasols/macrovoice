@@ -3,8 +3,8 @@ Socket path: /tmp/macrowhisper-502.sock
 Config file: /Users/exampleuser/.config/macrowhisper/macrowhisper.json
 Recordings watcher: yes (armed, started 6h ago, last event 6h ago, pending 0)
 Folder watcher: no (not initialized)
-Superwhisper folder: /Users/exampleuser/mw-bridge
-Recordings folder: /Users/exampleuser/mw-bridge/recordings (exists: yes)
+Superwhisper folder: /Users/exampleuser/macrovoice
+Recordings folder: /Users/exampleuser/macrovoice/recordings (exists: yes)
 Active action: autoPaste
 Icon: (none)
 moveTo: .delete

@@ -79,7 +79,7 @@ class TestRecordingNames(unittest.TestCase):
 class PublisherTestCase(unittest.TestCase):
     def setUp(self):
         self._tmp = TemporaryDirectory()
-        self.watch = Path(self._tmp.name) / "mw-bridge"
+        self.watch = Path(self._tmp.name) / "macrovoice"
         # min_gap_s deliberately tiny so tests stay fast; spacing behavior is
         # asserted relative to whatever gap is configured, not to a wall-clock value.
         self.pub = Publisher(self.watch, min_gap_s=0.05)

@@ -52,7 +52,7 @@
   ],
 
   "defaults": {
-    "watch": "~/mw-bridge",
+    "watch": "~/macrovoice",
     "activeAction": "autoPaste",
     "moveTo": ".delete",
     "clipboardBuffer": 60.0,
@@ -100,7 +100,7 @@
         "Note that shell actions get shell-safe escaping applied to {{swResult}},",
         "so quotes appear backslashed in the log. Insert actions are not escaped."
       ],
-      "action": "printf '%s fired: %s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" '{{swResult}}' >> ~/mw-bridge/fired.log",
+      "action": "printf '%s fired: %s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" '{{swResult}}' >> ~/macrovoice/fired.log",
       "scriptAsync": true
     }
   }

@@ -51,9 +51,9 @@ class TestRunningDaemon(unittest.TestCase):
         self.assertEqual(self.snap.watcher_started_ago_s, 6 * 3600)
 
     def test_folders(self):
-        self.assertEqual(self.snap.watch_folder, "/Users/exampleuser/mw-bridge")
+        self.assertEqual(self.snap.watch_folder, "/Users/exampleuser/macrovoice")
         self.assertEqual(
-            self.snap.recordings_folder, "/Users/exampleuser/mw-bridge/recordings"
+            self.snap.recordings_folder, "/Users/exampleuser/macrovoice/recordings"
         )
         self.assertTrue(self.snap.recordings_folder_exists)
 

@@ -26,7 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 class CliTestCase(unittest.TestCase):
     def setUp(self):
         self._tmp = TemporaryDirectory()
-        self.watch = Path(self._tmp.name) / "mw-bridge"
+        self.watch = Path(self._tmp.name) / "macrovoice"
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -190,7 +190,7 @@ class TestExitCodePolicy(CliTestCase):
                     "-m",
                     "macrovoice",
                     "--watch",
-                    str(blocked / "mw-bridge"),
+                    str(blocked / "macrovoice"),
                     "--gap",
                     "0.01",
                 ],
@@ -244,6 +244,126 @@ class TestLogging(CliTestCase):
             if line.strip()
         ]
         self.assertGreaterEqual(len(lines), 2)
+
+
+class TestTheDefaultWatchRoot(unittest.TestCase):
+    """B4, proved through the shipped command with NO `--watch` given.
+
+    This is the only shape that matches how VoiceInk actually invokes us: the
+    Mode's command is `macrovoice.sh --mode <name>`, with no watch flag, so
+    `DEFAULT_WATCH` is not a fallback here, it is the production path. A unit
+    test of the resolver alone would not catch argparse being wired to the wrong
+    thing.
+
+    HOME is redirected to a temp directory so nothing here can see, create or
+    publish into the developer's real `~/mw-bridge`.
+    """
+
+    def setUp(self):
+        self._tmp = TemporaryDirectory()
+        self.home = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def run_with_home(self, *args, transcript="hello", **env_overrides):
+        env = dict(os.environ)
+        env.pop("VOICEINK_TRANSCRIPT", None)
+        env.pop("MACROVOICE_WATCH", None)
+        env.pop("MW_BRIDGE_WATCH", None)
+        env["HOME"] = str(self.home)
+        env["VOICEINK_TRANSCRIPT"] = transcript
+        env.update(env_overrides)
+        return subprocess.run(
+            # --no-liveness-check so the test never shells out to the real
+            # macrowhisper, and never depends on whether it happens to be up.
+            [
+                sys.executable, "-m", "macrovoice",
+                "--gap", "0.01", "--no-liveness-check", *args,
+            ],
+            input="",
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+            env=env,
+            timeout=30,
+        )
+
+    def published_under(self, name):
+        recordings = self.home / name / "recordings"
+        if not recordings.exists():
+            return []
+        return sorted(p for p in recordings.iterdir() if p.is_dir())
+
+    def test_a_fresh_machine_publishes_into_macrovoice(self):
+        result = self.run_with_home(transcript="fresh install")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.published_under("macrovoice")), 1, result.stderr)
+
+    def test_an_unmigrated_install_still_publishes_into_mw_bridge(self):
+        """THE regression test for B4, end to end.
+
+        If this fails, upgrading silently redirects an existing user's
+        dictations into a directory macrowhisper is not watching, and
+        macrowhisper destroys them rather than delaying them.
+        """
+        (self.home / "mw-bridge").mkdir()
+        result = self.run_with_home(transcript="legacy install")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.published_under("mw-bridge")), 1, result.stderr)
+        self.assertFalse(
+            (self.home / "macrovoice").exists(),
+            "the new directory must not be created behind an unmigrated user's back",
+        )
+
+    def test_the_new_environment_variable_is_honoured(self):
+        target = self.home / "elsewhere"
+        result = self.run_with_home(MACROVOICE_WATCH=str(target))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.published_under("elsewhere")), 1, result.stderr)
+
+    def test_the_legacy_environment_variable_is_still_honoured(self):
+        target = self.home / "scripted"
+        result = self.run_with_home(MW_BRIDGE_WATCH=str(target))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.published_under("scripted")), 1, result.stderr)
+
+    def test_the_legacy_environment_variable_is_honoured_silently(self):
+        # Ruled: support both, say nothing. A deprecation notice on the delivery
+        # path is noise the user cannot act on mid-dictation.
+        target = self.home / "scripted"
+        result = self.run_with_home(MW_BRIDGE_WATCH=str(target))
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(result.stdout, "")
+        log = (target / "macrovoice.log").read_text(encoding="utf-8")
+        self.assertNotIn("MW_BRIDGE_WATCH", log)
+        self.assertNotIn("deprecat", log.lower())
+        self.assertNotIn("legacy", log.lower())
+
+    def test_an_explicit_watch_flag_outranks_an_existing_legacy_directory(self):
+        (self.home / "mw-bridge").mkdir()
+        target = self.home / "explicit"
+        result = self.run_with_home("--watch", str(target))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.published_under("explicit")), 1, result.stderr)
+        self.assertEqual(self.published_under("mw-bridge"), [])
+
+    def test_help_names_both_environment_variables(self):
+        # The published interface. If the legacy name is ever removed, this test
+        # is the reminder that the README and this help text must change too.
+        result = self.run_with_home("--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("MACROVOICE_WATCH", result.stdout)
+        self.assertIn("MW_BRIDGE_WATCH", result.stdout)
+        self.assertIn("~/macrovoice", result.stdout)
+
+    def test_help_does_not_leak_a_resolved_machine_path(self):
+        # The default is computed per run, so printing it would both leak the
+        # user's home directory and print a value that changes with the
+        # filesystem. The help text states the rule instead.
+        (self.home / "mw-bridge").mkdir()
+        result = self.run_with_home("--help")
+        self.assertNotIn(str(self.home / "mw-bridge"), result.stdout)
 
 
 class TestLivenessCheck(CliTestCase):

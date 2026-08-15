@@ -44,7 +44,7 @@ def fake_runner(stdout="", returncode=0, raises=None):
 RUNNING = (
     "Macrowhisper version: 2.1.1\n"
     "Recordings watcher: yes (armed, started 2h ago, last event never, pending 0)\n"
-    "Superwhisper folder: /Users/x/mw-bridge\n"
+    "Superwhisper folder: /Users/x/macrovoice\n"
 )
 
 

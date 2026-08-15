@@ -24,7 +24,15 @@ venv/
 htmlcov/
 *.egg-info/
 
-# Bridge runtime state. The real watch root lives at ~/mw-bridge, outside the repo.
+# Bridge runtime state. The real watch root lives at ~/macrovoice (or, on an
+# install that predates the rename, ~/mw-bridge), outside the repo. These rules
+# only catch a watch root someone pointed INTO the repo by mistake.
+#
+# DO NOT "finish the rename" by adding /macrovoice/ here. That is the Python
+# package directory. Ignoring it would make every new module in the package
+# invisible to `git add`, on a repo whose .gitignore already fails closed and
+# where `git status` is therefore not a reliable alarm. Pinned by
+# tests/test_watch.py.
 /mw-bridge/
 .spool/
 .staging/

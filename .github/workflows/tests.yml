@@ -67,7 +67,7 @@ jobs:
           # The unit tests import the package. This proves the thing VoiceInk
           # actually invokes works: env var in, meta.json on disk.
           set -euo pipefail
-          WATCH="$(mktemp -d)/mw-bridge"
+          WATCH="$(mktemp -d)/macrovoice"
           VOICEINK_TRANSCRIPT='ci smoke café 🎙' \
             python -m macrovoice --watch "$WATCH" --gap 0.01 < /dev/null
           python - "$WATCH" <<'PY'

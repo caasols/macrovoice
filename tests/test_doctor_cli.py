@@ -57,6 +57,110 @@ class TestDoctorRuns(unittest.TestCase):
             self.assertNotIn("\u2014", result.stdout)  # an em-dash, which house rules forbid
 
 
+class TestDoctorResolvesTheSameWatchRootAsDelivery(unittest.TestCase):
+    """doctor and the delivery path must agree about the default.
+
+    If they disagree, doctor inspects a directory nothing publishes into and
+    reports a clean bill of health for the wrong bridge, which is worse than no
+    check at all. HOME is redirected so nothing here can read or create the
+    developer's real directories.
+    """
+
+    def setUp(self):
+        self._tmp = TemporaryDirectory()
+        self.home = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def run_with_home(self, *args):
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(REPO_ROOT)
+        env["HOME"] = str(self.home)
+        env.pop("MACROVOICE_WATCH", None)
+        env.pop("MW_BRIDGE_WATCH", None)
+        return subprocess.run(
+            [sys.executable, "-m", "macrovoice", "doctor", "--check", *args],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+            cwd=str(REPO_ROOT),
+        )
+
+    def detail_after(self, stdout, title):
+        """The detail line doctor prints under a named check.
+
+        Asserting on the whole report is too loose: `~/macrovoice` also appears
+        inside the legacy migration hint, so a substring search over stdout
+        passes even when the watch root resolved to the old directory.
+        """
+        lines = stdout.splitlines()
+        for index, line in enumerate(lines):
+            if title in line:
+                return lines[index + 1].strip()
+        self.fail("no check titled %r in:\n%s" % (title, stdout))
+
+    def test_a_fresh_machine_is_checked_against_macrovoice(self):
+        result = self.run_with_home()
+        detail = self.detail_after(result.stdout, "the watch directory exists")
+        self.assertIn(str(self.home / "macrovoice"), detail)
+        self.assertNotIn("mw-bridge", detail)
+
+    def test_an_unmigrated_install_is_checked_against_mw_bridge(self):
+        (self.home / "mw-bridge" / "recordings").mkdir(parents=True)
+        result = self.run_with_home()
+        detail = self.detail_after(result.stdout, "the watch directory exists")
+        self.assertEqual(detail, str(self.home / "mw-bridge"))
+
+    def test_the_legacy_directory_earns_a_warning_and_not_a_problem(self):
+        (self.home / "mw-bridge" / "recordings").mkdir(parents=True)
+        result = self.run_with_home()
+        self.assertIn("the watch directory uses the current name", result.stdout)
+        self.assertIn("macrowhisper --stop-service", result.stdout)
+        # It must not be the thing that fails the run. Other checks on this
+        # machine may legitimately fail, so assert the marker rather than the
+        # exit code.
+        line = next(
+            l for l in result.stdout.splitlines()
+            if "the watch directory uses the current name" in l
+        )
+        self.assertTrue(line.strip().startswith("warning"), line)
+
+    def test_the_current_name_earns_no_warning(self):
+        (self.home / "macrovoice" / "recordings").mkdir(parents=True)
+        result = self.run_with_home()
+        line = next(
+            l for l in result.stdout.splitlines()
+            if "the watch directory uses the current name" in l
+        )
+        self.assertTrue(line.strip().startswith("ok"), line)
+
+    def test_doctor_creates_no_watch_directory(self):
+        # Stage 1 and 2 are read-only. Resolving the default now touches the
+        # filesystem, and a probe that CREATED what it probes for would both
+        # break that contract and, worse, be self-fulfilling: one `doctor` run
+        # would mint `~/macrovoice` and permanently divert an unmigrated user
+        # away from the directory macrowhisper is watching.
+        #
+        # Asserting the home is empty afterwards is too strong, and says so on
+        # the 3.9 floor: reading VoiceInk's preferences makes macOS create
+        # ~/Library underneath us. Only these two names are ours to answer for.
+        self.run_with_home()
+        self.assertFalse((self.home / "macrovoice").exists())
+        self.assertFalse((self.home / "mw-bridge").exists())
+
+    def test_help_names_both_environment_variables(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "macrovoice", "doctor", "--help"],
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "PYTHONPATH": str(REPO_ROOT), "HOME": str(self.home)},
+            cwd=str(REPO_ROOT),
+        )
+        self.assertIn("MACROVOICE_WATCH", result.stdout)
+        self.assertIn("MW_BRIDGE_WATCH", result.stdout)
+
+
 class TestDeliveryPathUnaffected(unittest.TestCase):
     """The guard must not shadow a dictation. These are the regressions that
     would cost a user their words."""

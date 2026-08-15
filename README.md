@@ -16,7 +16,7 @@ talk. `macrovoice` is the missing piece.
 ```
 VoiceInk Mode (Output = Custom Command)
   -> macrovoice.sh --mode <name>
-  -> ~/mw-bridge/recordings/<id>/meta.json      (atomic directory rename)
+  -> ~/macrovoice/recordings/<id>/meta.json     (atomic directory rename)
   -> stock macrowhisper: validate -> match triggers -> run action
 ```
 
@@ -50,7 +50,7 @@ is patched and neither knows the other exists.
 
 ```sh
 brew install ognistik/formulae/macrowhisper
-mkdir -p ~/mw-bridge/recordings
+mkdir -p ~/macrovoice/recordings
 ```
 
 Do not point this at `~/superwhisper`. If you also run Superwhisper, the bridge would interleave
@@ -82,8 +82,8 @@ from memory, erasing your change.
 
 ```sh
 macrowhisper --action markerLog
-VOICEINK_TRANSCRIPT='hello world' ./macrovoice.sh --watch ~/mw-bridge
-sleep 2 && cat ~/mw-bridge/fired.log
+VOICEINK_TRANSCRIPT='hello world' ./macrovoice.sh --watch ~/macrovoice
+sleep 2 && cat ~/macrovoice/fired.log
 ```
 
 A line appears. If it does not, fix that before going further.
@@ -92,7 +92,7 @@ A line appears. If it does not, fix that before going further.
 
 In VoiceInk, create a Mode with Output = **Custom Command** pointed at `probe.sh`, give it a
 keyboard shortcut or set it as default (see [Picking the Mode](#picking-the-mode-the-trap-everyone-hits)),
-dictate a few times, then read `~/mw-bridge/probe.log`. Confirm one `INVOCATION` block per
+dictate a few times, then read `~/macrovoice/probe.log`. Confirm one `INVOCATION` block per
 dictation and that nothing was pasted into the focused app.
 
 **5. Go live**
@@ -125,6 +125,37 @@ if you want `triggerModes` to work:
 ```
 /abs/path/to/macrovoice.sh --mode email
 ```
+
+## Upgrading from `~/mw-bridge`
+
+The watch directory used to be called `~/mw-bridge`, from before the tool had a name. It is now
+`~/macrovoice`. **Nothing breaks if you do nothing.** If `~/mw-bridge` exists and `~/macrovoice`
+does not, macrovoice keeps using `~/mw-bridge`, exactly as before, and `doctor` prints one
+`warning` telling you the name has changed. Upgrading cannot silently redirect your dictations
+into a directory macrowhisper is not watching.
+
+Migrating is optional, and takes four commands:
+
+```sh
+macrowhisper --stop-service
+mv ~/mw-bridge ~/macrovoice
+# then set defaults.watch to "~/macrovoice" in ~/.config/macrowhisper/macrowhisper.json
+macrowhisper --start-service
+./macrovoice.sh doctor --check      # confirm before you dictate again
+```
+
+Do not dictate between the `mv` and the `--start-service`. Edit the config file only while the
+daemon is stopped: an edit landing while it runs can be swallowed and then overwritten from
+memory.
+
+Both directories existing is the one state to avoid. macrovoice will use `~/macrovoice` while
+macrowhisper may still be watching the old copy, and every dictation lands where nothing is
+looking. `doctor` catches it two ways: `mw.watchmatch` fails and names both paths, and
+`bridge.legacywatch` names the leftover directory. Run `doctor --check` after migrating, before
+your next dictation.
+
+The environment variable `MW_BRIDGE_WATCH` still works and is not going away in this release.
+`MACROVOICE_WATCH` is the current name; if both are set, the new one wins.
 
 ## Picking the Mode, the trap everyone hits
 
@@ -183,8 +214,12 @@ paste bug in one app rather than a global setting doing collateral damage.
 ./macrovoice.sh doctor --check
 ```
 
-Twenty-six checks across both apps, reported in the order you hit them. It is read-only: it never
+Twenty-seven checks across both apps, reported in the order you hit them. It is read-only: it never
 creates a directory, edits a config, or writes to VoiceInk.
+
+One of them, `bridge.legacywatch`, is a `warning` rather than a problem: it tells you the watch
+directory has been renamed to `~/macrovoice` without pretending your working setup is broken. See
+[Upgrading from `~/mw-bridge`](#upgrading-from-mw-bridge).
 
 Six of them inspect the VoiceInk half, which is where the traps that look most like "the bridge
 is broken" actually live. The important one is `vi.reachable`: a Custom Command Mode that is
@@ -211,7 +246,7 @@ Exit codes: `0` healthy, `1` a fatal problem remains, `2` a fatal check could no
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--mode <name>` | none | Written as `modeName`, feeding macrowhisper's `triggerModes` |
-| `--watch <path>` | `$MW_BRIDGE_WATCH` or `~/mw-bridge` | macrowhisper's watch root |
+| `--watch <path>` | `$MACROVOICE_WATCH`, else `~/macrovoice` | macrowhisper's watch root. See [Upgrading](#upgrading-from-mw-bridge) |
 | `--gap <seconds>` | `1.0` | Minimum spacing between publishes |
 | `--drain-only` | off | Publish anything left in the spool and exit |
 | `--no-liveness-check` | off | Publish even when macrowhisper is provably not running. See below |
@@ -319,19 +354,21 @@ macOS across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice
 
 | File | Tests | Covers |
 | --- | --- | --- |
-| `tests/test_publisher.py` | 48 | Staging, spool, drain lock, burst spacing, atomic renames, name monotonicity, cross-process collisions, and a future-dated `.last-publish` no longer stalling delivery |
-| `tests/test_cli.py` | 25 | The CLI driven through real subprocesses, including the exit-code policy and the open-stdin regression |
+| `tests/test_doctor_*.py` (9 files) | 261 | `doctor`'s checks, adapters, runner, report and status parser, exercised without a real macrowhisper |
+| `tests/test_publisher.py` | 57 | Staging, spool, drain lock, burst spacing, atomic renames, name monotonicity, cross-process collisions, and a future-dated `.last-publish` no longer stalling delivery |
+| `tests/test_cli.py` | 42 | The CLI driven through real subprocesses, including the exit-code policy, the open-stdin regression, and which watch root a bare invocation resolves to |
+| `tests/test_integration_safety.py` | 26 | The integration suite's own guard against hijacking your macrowhisper |
 | `tests/test_harness_port.py` | 24 | That the oracle still matches macrowhisper's validation gate, branch for branch |
 | `tests/test_meta.py` | 23 | A 31-entry escaping matrix and the `meta.json` schema contract |
 | `tests/test_transcript.py` | 22 | Env and stdin resolution, the empty-input policy, and whether stdin needs reading at all |
-| `tests/test_integration_safety.py` | 20 | The integration suite's own guard against hijacking your macrowhisper |
+| `tests/test_watch.py` | 20 | Watch-root resolution against a real temporary home, including that an unmigrated `~/mw-bridge` keeps working |
+| `tests/test_voiceink_invocation.py` | 15 | The `.sh` wrappers through `/bin/zsh -lc`, exactly as VoiceInk calls them, and that `probe.sh` resolves the watch root the same way Python does |
+| `tests/test_listener.py` | 14 | The liveness probe, including that it only defers on macrowhisper's own "not running" sentence |
+| `tests/test_integration_macrowhisper.py` | 10 | Opt-in; drives a **real macrowhisper daemon** |
 | `tests/test_sample_config.py` | 9 | The shipped `macrowhisper.sample.json`: structure, and the settings that cause harm when wrong |
-| `tests/test_voiceink_invocation.py` | 8 | The `.sh` wrappers through `/bin/zsh -lc`, exactly as VoiceInk calls them |
-| `tests/test_integration_macrowhisper.py` | 8 | Opt-in; drives a **real macrowhisper daemon** |
-| `tests/test_doctor_*.py` (9 files) | 241 | `doctor`'s checks, adapters, runner, report and status parser, exercised without a real macrowhisper |
 
 ```sh
-python3 -m unittest discover -s tests -t tests -v      # 434 tests, 8 skipped
+python3 -m unittest discover -s tests -t tests -v      # 523 tests, 10 skipped
 MACROVOICE_INTEGRATION=1 python3 -m unittest discover -s tests -t tests
 ```
 
@@ -354,7 +391,7 @@ opened a pipe and never closed it (launchd, cron, CI, a backgrounded shell) bloc
 *before* the transcript reached the spool, which is the one place it cannot be lost from.
 
 The integration tests are opt-in because they launch a real daemon. They confine themselves to a
-temporary watch directory and a temporary config, so `~/mw-bridge` and `~/.config/macrowhisper/`
+temporary watch directory and a temporary config, so `~/macrovoice` and `~/.config/macrowhisper/`
 are never touched, and they use a shell action rather than a paste, so no Accessibility
 permission is needed and nothing is typed into whatever app you have focused. `macrowhisper
 --config` *persists* the path it is given, so the original is captured at import, restored
@@ -478,6 +515,8 @@ resolve at action time.
 | `macrovoice/meta.py` | Build and serialize the `meta.json` document (pure) |
 | `macrovoice/publisher.py` | Staging, spool, drain lock, atomic renames |
 | `macrovoice/cli.py` | Wiring, logging, exit-code policy |
+| `macrovoice/listener.py` | Asks macrowhisper whether anything is listening before publishing |
+| `macrovoice/watch.py` | Which watch root a bare invocation uses, and the `~/mw-bridge` fallback |
 | `macrovoice/doctor/` | Read-only inspection of the whole setup, see [Diagnosing a broken setup](#diagnosing-a-broken-setup) |
 | `test_harness.py` | Port of macrowhisper's own validation gate, used as the test oracle |
 | `macrovoice.sh` | The one-liner you paste into VoiceInk |
@@ -500,7 +539,7 @@ being broken.
 | A dictation closed my draft | `simEsc`. See the section above |
 | Config edits appear to do nothing | Use `macrowhisper --action`, not a file edit while the daemon runs |
 | Quotes look backslashed in `fired.log` | Expected. macrowhisper shell-escapes `{{swResult}}` for shell actions. Insert actions are not escaped |
-| Transcript missing entirely | Check `~/mw-bridge/macrovoice.log` and `~/mw-bridge/.spool/`, or force it with `--drain-only` |
+| Transcript missing entirely | Check `~/macrovoice/macrovoice.log` and `~/macrovoice/.spool/`, or force it with `--drain-only` |
 | A voice trigger fired but nothing pasted | Expected. A matched trigger runs instead of your default action, not alongside it |
 | My config file changed on its own | `autoUpdateConfig`, which defaults to true. See [Four things that will surprise you](#four-things-that-will-surprise-you) |
 | Stray quotes or punctuation in a triggered search | AI enhancement reshaped the dictation before the bridge saw it. Same section |

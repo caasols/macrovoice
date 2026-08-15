@@ -104,6 +104,57 @@ def _check_watch_dirs(ctx):
     return Finding.ok("%s" % snapshot.watch_root)
 
 
+def _same_dir(a, b):
+    """Compare directories by realpath.
+
+    A home directory reached through a symlink is still the same directory, and
+    a hint this check fails to show is this check failing at its only job.
+    """
+    return os.path.realpath(str(a)) == os.path.realpath(str(b))
+
+
+def _check_legacy_watch(ctx):
+    """B4's legacy hint. Never fatal, and that is the whole design.
+
+    The rename from `~/mw-bridge` to `~/macrovoice` is deliberately
+    non-breaking: macrovoice.watch keeps using an existing `~/mw-bridge` so an
+    upgrade cannot silently redirect a working install into a directory nothing
+    watches. The cost of that kindness is that an unmigrated user would
+    otherwise never learn the directory has a new name, which is how a
+    temporary fallback becomes permanent. This is the only place they are told.
+
+    WARN, not FAIL: their bridge works. Reporting a healthy machine as broken is
+    the exact shape that makes twelve of the thirteen setup traps look like "the
+    bridge does not work", and doing it inside the tool built to cure that would
+    be its own kind of joke.
+
+    Two states are worth reporting, and the second is the easier one to miss:
+    the legacy directory being USED, and a legacy directory still lying around
+    after a `cp -r` migration, where macrowhisper's config may well still point
+    at the stale copy.
+    """
+    legacy = ctx.home_dir() / "mw-bridge"
+    current = ctx.home_dir() / "macrovoice"
+
+    if _same_dir(ctx.watch_root, legacy):
+        return Finding.problem(
+            "using %s, the name macrovoice had before it had a name" % legacy,
+            "not urgent, the bridge works as it is: macrowhisper --stop-service, "
+            "mv %s %s, set defaults.watch to %s in macrowhisper's config, "
+            "macrowhisper --start-service" % (legacy, current, current),
+        )
+
+    if legacy.is_dir():
+        return Finding.problem(
+            "%s still exists but macrovoice publishes into %s"
+            % (legacy, ctx.watch_root),
+            "confirm macrowhisper watches %s, then move %s to the Trash"
+            % (ctx.watch_root, legacy),
+        )
+
+    return Finding.ok()
+
+
 def _check_script(ctx):
     script = ctx.bridge.script_path()
     if not script.exists():
@@ -702,6 +753,12 @@ CHECKS = (
         title="the watch directory exists",
         severity=Severity.FAIL,
         inspect=_check_watch_dirs,
+    ),
+    Check(
+        id="bridge.legacywatch",
+        title="the watch directory uses the current name",
+        severity=Severity.WARN,
+        inspect=_check_legacy_watch,
     ),
     Check(
         id="bridge.script",

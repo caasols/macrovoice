@@ -13,7 +13,7 @@ default, because they launch a real daemon:
     MACROVOICE_INTEGRATION=1 python3 -m unittest discover -s tests -t tests
 
 Safety, since this drives a system-wide tool:
-  * A temporary watch directory and config are used. `~/mw-bridge` and
+  * A temporary watch directory and config are used. `~/macrovoice` and
     `~/.config/macrowhisper/` are never read or written.
   * `macrowhisper --config <path>` PERSISTS that path for future runs, so the
     saved path is captured before and restored after, even on failure.
@@ -297,7 +297,7 @@ class RealMacrowhisperTestCase(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
 
         root = Path(self._tmp.name)
-        self.watch = root / "mw-bridge"
+        self.watch = root / "macrovoice"
         (self.watch / "recordings").mkdir(parents=True)
         self.fired_log = self.watch / "fired.log"
         self.config_path = root / "macrowhisper.json"

@@ -20,7 +20,7 @@
 #      and set the command to the absolute path of this script.
 #   3. Dictate 3 or 4 times: something short, something long, something with
 #      punctuation, and one from a different front app.
-#   4. Read ~/mw-bridge/probe.log
+#   4. Read ~/macrovoice/probe.log
 #
 # WHAT TO LOOK FOR
 #   - One INVOCATION block per dictation. More than one means the firing semantics
@@ -32,7 +32,23 @@
 
 set -u
 
-LOG="${MW_BRIDGE_WATCH:-$HOME/mw-bridge}/probe.log"
+# The same watch-root resolution macrovoice/watch.py performs, reimplemented in
+# shell ON PURPOSE. This is the Gate 2 instrument: it has to run when the Python
+# half is the thing under suspicion, so it must not import it. Keep the two in
+# step; tests/test_voiceink_invocation.py exercises this branch order.
+if [[ -n "${MACROVOICE_WATCH:-}" ]]; then
+  WATCH="$MACROVOICE_WATCH"
+elif [[ -n "${MW_BRIDGE_WATCH:-}" ]]; then
+  WATCH="$MW_BRIDGE_WATCH"          # legacy name, still honoured, deliberately silent
+elif [[ -d "$HOME/macrovoice" ]]; then
+  WATCH="$HOME/macrovoice"
+elif [[ -d "$HOME/mw-bridge" ]]; then
+  WATCH="$HOME/mw-bridge"           # an install that predates the rename
+else
+  WATCH="$HOME/macrovoice"
+fi
+
+LOG="$WATCH/probe.log"
 mkdir -p "$(dirname "$LOG")"
 
 {

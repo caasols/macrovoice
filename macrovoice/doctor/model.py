@@ -90,3 +90,12 @@ class Context:
     # macrowhisper-only Context passes; the vi.* checks report UNKNOWN in that
     # case rather than assuming VoiceInk is absent.
     vi: object = None
+    # The user's home directory, injectable for the same reason the adapters
+    # are: `bridge.legacywatch` has to reason about `~/mw-bridge` and
+    # `~/macrovoice` by name, and a check that reads the real home cannot be
+    # tested without touching the developer's own machine. None means the real
+    # one; see `home_dir` below.
+    home: Optional[Path] = None
+
+    def home_dir(self) -> Path:
+        return Path.home() if self.home is None else Path(self.home)

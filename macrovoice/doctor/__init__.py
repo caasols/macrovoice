@@ -9,19 +9,17 @@ determined. A check that cannot fail is useless in a script.
 """
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
 from .adapters.bridge import BridgeState
 from .adapters.macrowhisper import Macrowhisper
 from .adapters.voiceink import VoiceInk
+from ..watch import DEFAULT_WATCH, ENV_WATCH, LEGACY_ENV_WATCH, resolve_watch_default
 from .model import Context
 from .registry import CHECKS
 from .report import exit_code, render
 from .runner import run
-
-DEFAULT_WATCH = "~/mw-bridge"
 
 
 def _parse_args(argv):
@@ -34,8 +32,15 @@ def _parse_args(argv):
     )
     parser.add_argument(
         "--watch",
-        default=os.environ.get("MW_BRIDGE_WATCH", DEFAULT_WATCH),
-        help="macrowhisper watch root (default: $MW_BRIDGE_WATCH or %s)" % DEFAULT_WATCH,
+        # Must resolve exactly as cli.py does, or doctor inspects a directory
+        # the delivery path is not using and reports on the wrong bridge. That
+        # is why both call the same function. See macrovoice/watch.py.
+        default=resolve_watch_default(),
+        help=(
+            "macrowhisper watch root (default: $%s, else $%s, else %s, falling "
+            "back to ~/mw-bridge when only that legacy directory exists)"
+            % (ENV_WATCH, LEGACY_ENV_WATCH, DEFAULT_WATCH)
+        ),
     )
     parser.add_argument(
         "--check",

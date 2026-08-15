@@ -129,12 +129,13 @@ def paste_mode(name="Dictation", is_default=True):
     )
 
 
-def context(mw=None, bridge=None, watch_root="/tmp/w", vi=None):
+def context(mw=None, bridge=None, watch_root="/tmp/w", vi=None, home=None):
     return Context(
         watch_root=Path(watch_root),
         mw=mw or FakeMacrowhisper(),
         bridge=bridge or FakeBridge(),
         vi=vi if vi is not None else FakeVoiceInk(),
+        home=Path(home) if home is not None else None,
     )
 
 
@@ -240,6 +241,123 @@ class TestBridgeLayout(unittest.TestCase):
     def test_recent_errors_are_reported(self):
         ctx = context(bridge=FakeBridge(errors=("2026-08-09T10:00:00Z ERROR boom",)))
         self.assertIs(registry._check_log_errors(ctx).outcome, Outcome.PROBLEM)
+
+
+class TestTheLegacyWatchHint(unittest.TestCase):
+    """B4's legacy hint.
+
+    The rename to `~/macrovoice` is non-breaking, so an unmigrated user keeps a
+    WORKING bridge on `~/mw-bridge` indefinitely. That is deliberate, and it is
+    also exactly how a deprecation becomes permanent: nothing ever tells them.
+    This check is the telling.
+
+    It must never be fatal. A user on the legacy path has a healthy bridge, and
+    turning a healthy machine red would reproduce the "the bridge is broken"
+    shape that twelve of the thirteen setup traps already have.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def make(self, name):
+        (self.home / name).mkdir()
+        return self.home / name
+
+    def check(self, watch_root):
+        return registry._check_legacy_watch(
+            context(watch_root=str(watch_root), home=str(self.home))
+        )
+
+    def test_the_current_name_is_ok(self):
+        target = self.make("macrovoice")
+        self.assertIs(self.check(target).outcome, Outcome.OK)
+
+    def test_the_legacy_directory_in_use_is_reported(self):
+        target = self.make("mw-bridge")
+        finding = self.check(target)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("mw-bridge", finding.detail)
+
+    def test_the_report_gives_the_migration_and_names_both_paths(self):
+        target = self.make("mw-bridge")
+        finding = self.check(target)
+        self.assertIn(str(self.home / "mw-bridge"), finding.fix_hint)
+        self.assertIn(str(self.home / "macrovoice"), finding.fix_hint)
+        # The migration is worthless without the config edit: moving the
+        # directory alone points macrowhisper at a path that no longer exists.
+        self.assertIn("defaults.watch", finding.fix_hint)
+        self.assertIn("stop-service", finding.fix_hint)
+
+    def test_a_leftover_legacy_directory_is_reported_even_when_unused(self):
+        # The half-migrated state: `cp -r` rather than `mv`. macrovoice now uses
+        # the new directory, and the old one is still sitting there looking
+        # authoritative to anyone who reads macrowhisper's config.
+        target = self.make("macrovoice")
+        self.make("mw-bridge")
+        finding = self.check(target)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn(str(self.home / "mw-bridge"), finding.detail)
+        self.assertIn(str(self.home / "macrovoice"), finding.detail)
+
+    def test_a_custom_watch_root_is_not_nagged_about(self):
+        # Somebody who deliberately runs `--watch ~/somewhere-else` is not on a
+        # legacy default and has nothing to migrate.
+        target = self.make("somewhere-else")
+        self.assertIs(self.check(target).outcome, Outcome.OK)
+
+    def test_a_custom_watch_root_is_still_told_about_a_leftover(self):
+        target = self.make("somewhere-else")
+        self.make("mw-bridge")
+        self.assertIs(self.check(target).outcome, Outcome.PROBLEM)
+
+    def test_a_directory_merely_NAMED_mw_bridge_elsewhere_is_not_the_legacy_one(self):
+        # Only `~/mw-bridge` is the legacy default. `/projects/mw-bridge` is
+        # somebody's own choice.
+        other = self.home / "projects"
+        (other / "mw-bridge").mkdir(parents=True)
+        self.assertIs(self.check(other / "mw-bridge").outcome, Outcome.OK)
+
+    def test_it_is_a_warning_and_never_changes_the_exit_code(self):
+        from macrovoice.doctor.model import Severity
+        from macrovoice.doctor.report import exit_code
+        from macrovoice.doctor.runner import run
+
+        check = next(c for c in registry.CHECKS if c.id == "bridge.legacywatch")
+        self.assertIs(check.severity, Severity.WARN)
+
+        target = self.make("mw-bridge")
+        results = run(
+            (check,), context(watch_root=str(target), home=str(self.home))
+        )
+        self.assertIs(results[0].finding.outcome, Outcome.PROBLEM)
+        self.assertEqual(exit_code(results), 0)
+
+    def test_it_renders_under_bridge_layout_as_a_warning(self):
+        from macrovoice.doctor.report import render
+        from macrovoice.doctor.runner import run
+
+        check = next(c for c in registry.CHECKS if c.id == "bridge.legacywatch")
+        target = self.make("mw-bridge")
+        text = render(run((check,), context(watch_root=str(target), home=str(self.home))))
+        self.assertIn("Bridge layout", text)
+        self.assertIn("warning", text)
+        self.assertIn("1 warning", text)
+
+    def test_the_default_home_is_the_real_one(self):
+        # Context.home defaults to None so every existing construction site
+        # keeps working, exactly as Context.vi does. None must mean "the real
+        # home", not "no home".
+        ctx = Context(
+            watch_root=Path.home() / "mw-bridge",
+            mw=FakeMacrowhisper(),
+            bridge=FakeBridge(),
+            vi=FakeVoiceInk(),
+        )
+        self.assertIs(registry._check_legacy_watch(ctx).outcome, Outcome.PROBLEM)
 
 
 class TestTableIntegrity(unittest.TestCase):

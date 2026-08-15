@@ -24,8 +24,8 @@ from .meta import build_meta
 from .publisher import DEFAULT_MIN_GAP_S, Publisher
 from .listener import is_listening
 from .transcript import env_supplies_transcript, resolve_transcript
+from .watch import DEFAULT_WATCH, ENV_WATCH, LEGACY_ENV_WATCH, resolve_watch_default
 
-DEFAULT_WATCH = "~/mw-bridge"
 LOG_NAME = "macrovoice.log"
 # G3. Names the cause and the remedy, because the user's words are on disk and
 # recoverable and they cannot tell that from silence.
@@ -66,8 +66,14 @@ def _parse_args(argv):
     )
     parser.add_argument(
         "--watch",
-        default=os.environ.get("MW_BRIDGE_WATCH", DEFAULT_WATCH),
-        help=f"macrowhisper watch root (default: $MW_BRIDGE_WATCH or {DEFAULT_WATCH})",
+        # Resolved per invocation, not at import, which is what lets an
+        # unmigrated `~/mw-bridge` keep working. See macrovoice/watch.py.
+        default=resolve_watch_default(),
+        help=(
+            f"macrowhisper watch root (default: ${ENV_WATCH}, else ${LEGACY_ENV_WATCH}, "
+            f"else {DEFAULT_WATCH}, falling back to ~/mw-bridge when only that "
+            "legacy directory exists)"
+        ),
     )
     parser.add_argument(
         "--gap",
