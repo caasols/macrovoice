@@ -214,6 +214,7 @@ Exit codes: `0` healthy, `1` a fatal problem remains, `2` a fatal check could no
 | `--watch <path>` | `$MW_BRIDGE_WATCH` or `~/mw-bridge` | macrowhisper's watch root |
 | `--gap <seconds>` | `1.0` | Minimum spacing between publishes |
 | `--drain-only` | off | Publish anything left in the spool and exit |
+| `--no-liveness-check` | off | Publish even when macrowhisper is provably not running. See below |
 | `--log-transcript` | off | Log transcript text instead of just its length |
 
 ## Text input, without a microphone
@@ -266,7 +267,32 @@ failure: nothing errors, the dictation just disappears. Line references are to
 | A folder without `meta.json` inside it takes a slow path, then is cancelled after 17s for having no `.wav` | `:38`, `:457-462`, `:1928-1935` | Builds the folder in a staging dir and renames the whole directory in, so it is never seen half-built |
 | Two folders appearing in one filesystem event means **none** of them run | `:327-345` | Serializes publishing behind an `flock` with a minimum gap |
 | A folder whose name sorts below the newest one is discarded as cloud-sync replay | `:350` | Mints the published name at publish time, always above the current maximum |
-| Folders that already exist when the watcher arms are marked processed at startup | startup path | Cannot be defended from this side. Wait a few seconds after starting the daemon |
+| Folders that already exist when the watcher arms are marked processed at startup | startup path | Checks that macrowhisper is actually listening before publishing, and keeps the transcript spooled if it is not. Still wait a few seconds after starting the daemon |
+
+### Publishing when nothing is listening
+
+`macrovoice` checks that macrowhisper is actually running before it publishes, and if it is
+provably not, keeps your transcript in the spool instead. This is not politeness about ordering.
+Publishing into an unwatched directory **destroys** the dictation: the folder sits there, and when
+macrowhisper next starts, its watcher marks every folder that already exists as processed and runs
+none of them. The restart that should have delivered your words is what throws them away.
+
+The rule is deliberately one-sided: it defers **only** on macrowhisper's own
+`macrowhisper is not running.` sentence. Anything else publishes, including a timeout, a
+macrowhisper that is not on `PATH`, and output it does not recognise. `--status` exits 0 whether or
+not a daemon is listening, so that sentence is the only definitive signal, and its absence is not
+proof of life. A check that hesitated whenever it was unsure could quietly stop delivering on a
+working setup, which is worse than the loss it prevents.
+
+Deferred transcripts wait in `.spool/`, which is outside `recordings/` and so cannot be touched by
+that same startup sweep. The next run publishes them, and `--drain-only` forces it. The log says
+what happened and how to fix it rather than going quiet.
+
+In practice the window is small: the launchd agent restarts macrowhisper within seconds of a crash,
+so only a clean stop (`--stop-service`, an upgrade, a logout) leaves it down. Pass
+`--no-liveness-check` to skip the check. One caveat worth knowing: the check asks whether *a*
+macrowhisper is listening, not whether the one watching *your* directory is. With the normal
+one-daemon setup those are the same question.
 
 Plus one from VoiceInk: it suppresses its own paste and then kills the command at 10 seconds
 (`TranscriptionDelivery.swift:43-46`, `:115`), so the transcript exists nowhere else.
@@ -281,7 +307,7 @@ delivered, and a 633-character dictation arrived intact.
 ## Tests
 
 434 tests, 8 skipped: 193 on the delivery path, 241 for `doctor`. Total branch coverage is 99%
-(99.34%), measured across the whole package with subprocess tracing. That last part matters: a
+(99.36%), measured across the whole package with subprocess tracing. That last part matters: a
 naive run reports `cli.py` at 0%, which is wrong, because its tests drive it as a real subprocess
 that `coverage` cannot see without `COVERAGE_PROCESS_START` and a `sitecustomize.py`. Every
 delivery-path module (`transcript.py`, `meta.py`, `publisher.py`, `cli.py`) is at 100%, and so is
