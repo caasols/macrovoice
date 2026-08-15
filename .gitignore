@@ -45,6 +45,15 @@ upstream/
 graphify-out/
 .graphifyignore
 
+# Agent working state: task briefs, plans and review diffs written by the superpowers
+# skills. Same category as docs/: a record of how the work was done, not part of the tool.
+# Listed here on 2026-08-11 so it fails closed like everything else. It was already ignored
+# in practice, but only by a nested `.superpowers/sdd/.gitignore` containing `*`, which is
+# written by the skill and could vanish with a skill update or a re-scaffold. The `.md` files
+# under it would still be caught by the `*.md` rule below; the review `.diff` files would not
+# have been, so the protection rested on a file this repo does not control.
+.superpowers/
+
 # Markdown is private by default.
 #
 # Notes, working docs and captured output live in this folder next to the code.
