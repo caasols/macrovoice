@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from macrovoice.publisher import DEFAULT_MIN_GAP_S as DEFAULT_GAP_S  # noqa: E402
+from macrovoice.listener import NOT_RUNNING_SENTINEL  # noqa: E402
 
 MACROWHISPER = shutil.which("macrowhisper")
 ENABLED = os.environ.get("MACROVOICE_INTEGRATION") == "1"
@@ -363,6 +364,37 @@ class RealMacrowhisperTestCase(unittest.TestCase):
             self.fail(
                 f"macrowhisper's recordings watcher did not arm within {READY_TIMEOUT_S}s.\n"
                 f"last status:\n{self._status_text()}\ndaemon:\n{self._daemon_output()}"
+            )
+
+    def _stop_daemon_and_wait(self):
+        """Stop this test's daemon and wait until nothing answers the socket.
+
+        Polling for the sentinel rather than sleeping: process exit and socket
+        release are not the same instant, and a test that raced that gap would
+        fail intermittently in a way that looks like the liveness check being
+        wrong when it is the test being impatient.
+        """
+        self.daemon.terminate()
+        try:
+            self.daemon.wait(timeout=10)
+        except subprocess.TimeoutExpired:  # pragma: no cover - defensive
+            self.daemon.kill()
+            self.daemon.wait(timeout=10)
+
+        if not _poll(lambda: NOT_RUNNING_SENTINEL in self._status_text(), 8.0):
+            # Measured 2026-08-15 on a machine with the service installed: the
+            # launchd agent carries KeepAlive, so the user's own daemon reclaims
+            # the shared socket within a second of ours dying and --status keeps
+            # answering. There is then no way to observe "not running" without
+            # stopping the developer's real macrowhisper, which a test must never
+            # do. Skip rather than fail: the condition is the environment, not
+            # the code, and a red suite that means "you have macrowhisper
+            # installed properly" trains people to ignore red.
+            self.skipTest(
+                "another macrowhisper holds the socket (almost certainly your "
+                "own launchd service, which KeepAlive restarts), so an outage "
+                "cannot be simulated without stopping it. Run "
+                "`macrowhisper --stop-service` first to exercise this test."
             )
 
     def _status_text(self):
@@ -736,6 +768,72 @@ class PresetSearchTriggerTest(RealMacrowhisperTestCase):
         text = lines[0].split("TEXT=", 1)[1]
         self.assertNotIn("ask youtube", text.lower(), "trigger not stripped: %r" % lines[0])
         self.assertIn("best pizza in madrid", text.lower(), "got: %r" % lines[0])
+
+
+class LivenessAgainstARealDaemonTest(RealMacrowhisperTestCase):
+    """G3's one remaining unproven link: that a REAL stopped macrowhisper says so.
+
+    Everything else about the liveness check is covered without a daemon:
+    listener.py's three states, Publisher's deferral, and the CLI end to end with
+    a stub binary on PATH. What a stub cannot prove is that macrowhisper's actual
+    output contains the sentinel we match on, which is the one thing that would
+    silently break if upstream reworded it. The check would fail open forever and
+    look like it worked.
+
+    A NOTE ON WHAT THIS CHECK ACTUALLY ANSWERS, worth knowing before trusting it:
+    `macrowhisper --status` talks to whatever daemon owns the shared socket, so
+    the probe answers "is a macrowhisper listening", not "is the macrowhisper
+    watching MY directory listening". For the real deployment, one daemon and one
+    watch root, those are the same question. They come apart only under this test
+    suite, which is why this test kills its own daemon rather than reasoning
+    about watch roots.
+    """
+
+    def test_the_real_sentinel_is_what_listener_matches_on(self):
+        from macrovoice.listener import NOT_RUNNING_SENTINEL, is_listening
+
+        # Alive: the daemon started in setUp owns the socket.
+        self.assertIs(is_listening(), True, self._status_text())
+
+        self._stop_daemon_and_wait()
+
+        status = self._status_text()
+        self.assertIn(
+            NOT_RUNNING_SENTINEL, status,
+            "macrowhisper no longer prints the sentence the liveness check "
+            "matches on. The check now fails open permanently and silently.\n"
+            "got:\n%s" % status,
+        )
+        self.assertIs(is_listening(), False)
+
+    def test_a_dictation_during_an_outage_is_spooled_and_then_delivered(self):
+        """The whole point of G3, against a real daemon.
+
+        Without the check, the folder published during the outage is not merely
+        late: the watcher marks every folder that already exists when it arms as
+        processed, so the restart that should deliver it destroys it instead.
+        """
+        self._stop_daemon_and_wait()
+
+        result = self.run_macrovoice("spoken into the void")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            list((self.watch / "recordings").iterdir()), [],
+            "published into a folder the next arm would have discarded",
+        )
+        spooled = list((self.watch / ".spool").iterdir())
+        self.assertEqual(len(spooled), 1, "the transcript is not in the spool either")
+
+        self._start_daemon()
+        drain = self.run_macrovoice("", "--drain-only")
+        self.assertEqual(drain.returncode, 0, drain.stderr)
+
+        lines = self.wait_for_fires(1)
+        self.assertEqual(
+            lines, ["spoken into the void"],
+            "the deferred transcript never arrived after the daemon came back.\n"
+            "daemon:\n%s" % self._daemon_output(),
+        )
 
 
 if __name__ == "__main__":

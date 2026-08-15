@@ -22,10 +22,18 @@ from pathlib import Path
 
 from .meta import build_meta
 from .publisher import DEFAULT_MIN_GAP_S, Publisher
+from .listener import is_listening
 from .transcript import env_supplies_transcript, resolve_transcript
 
 DEFAULT_WATCH = "~/mw-bridge"
 LOG_NAME = "macrovoice.log"
+# G3. Names the cause and the remedy, because the user's words are on disk and
+# recoverable and they cannot tell that from silence.
+_NOT_RUNNING = (
+    "macrowhisper is not running, so nothing would have watched for this: %s. "
+    "It is safe in the spool and the next run publishes it. "
+    "Start it with: macrowhisper --start-service"
+)
 
 
 def _log(watch_root: Path, message: str) -> None:
@@ -76,6 +84,16 @@ def _parse_args(argv):
         help="Publish anything left in the spool and exit. Reads no transcript.",
     )
     parser.add_argument(
+        "--no-liveness-check",
+        action="store_true",
+        help=(
+            "Publish even when macrowhisper is provably not running. Off by "
+            "default: publishing into an unwatched folder does not delay the "
+            "dictation, it destroys it, because macrowhisper drops every folder "
+            "that already exists when its watcher next arms."
+        ),
+    )
+    parser.add_argument(
         "--log-transcript",
         action="store_true",
         help="Log transcript text. Off by default: the log would otherwise become a "
@@ -98,11 +116,19 @@ def main(argv=None) -> int:
     watch_root = Path(args.watch).expanduser()
 
     try:
-        publisher = Publisher(watch_root, min_gap_s=args.gap)
+        # G3. The probe answers False ONLY on macrowhisper's own "not running"
+        # sentence; everything else publishes. Deferring on uncertainty would
+        # stop delivery on a working setup, which is worse than the loss it
+        # prevents. See macrovoice/listener.py.
+        listener = None if args.no_liveness_check else is_listening
+        publisher = Publisher(watch_root, min_gap_s=args.gap, listener=listener)
 
         if args.drain_only:
             published = publisher.drain()
-            _log(watch_root, f"drain-only: published {len(published)}")
+            if publisher.listener_said_down:
+                _log(watch_root, _NOT_RUNNING % ("drain-only: nothing published"))
+            else:
+                _log(watch_root, f"drain-only: published {len(published)}")
             return 0
 
         if env_supplies_transcript(os.environ) or sys.stdin.isatty():
@@ -129,7 +155,15 @@ def main(argv=None) -> int:
         outcome = publisher.publish(meta)
 
         detail = f"text={transcript!r}" if args.log_transcript else f"chars={len(transcript)}"
-        if outcome.deferred:
+        if publisher.listener_said_down:
+            # Loud on purpose. A silent deferral is just a quieter version of the
+            # bug this exists to fix, and the user needs to know their words are
+            # waiting rather than delivered.
+            _log(
+                watch_root,
+                _NOT_RUNNING % (f"spooled {outcome.spooled.name} {detail}"),
+            )
+        elif outcome.deferred:
             _log(
                 watch_root,
                 f"spooled (deferred, will publish on a later run) {outcome.spooled.name} "

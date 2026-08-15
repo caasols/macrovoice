@@ -121,10 +121,22 @@ class Publisher:
         watch_root: Path,
         min_gap_s: float = DEFAULT_MIN_GAP_S,
         drain_budget_s: float = DEFAULT_DRAIN_BUDGET_S,
+        listener=None,
     ) -> None:
         self.watch_root = Path(watch_root).expanduser()
         self.min_gap_s = min_gap_s
         self.drain_budget_s = drain_budget_s
+        # G3. Optional callable returning True (listening), False (proven not
+        # listening) or None (could not tell). None here, the DEFAULT, means no
+        # probe at all and unconditional publishing, which is the behaviour every
+        # caller had before this existed. Injected rather than imported so this
+        # module keeps knowing nothing about macrowhisper's CLI.
+        self._listener = listener
+        # True only after a drain in which the probe returned a definite False.
+        # The CLI reads this to log the right thing: "spooled because nothing is
+        # listening" and "spooled because another process holds the lock" are
+        # very different messages to a user wondering where their words went.
+        self.listener_said_down = False
         self._counter = 0
         # published folder name -> the spool name it came from, so publish() can tell
         # whether ITS transcript made it out rather than just "something did".
@@ -351,6 +363,29 @@ class Publisher:
         self._ensure_layout()
         deadline = time.monotonic() + self.drain_budget_s
         published: List[Path] = []
+
+        # G3: publishing into a watch directory nobody is watching is not merely
+        # late delivery, it is destruction. macrowhisper's recordings watcher
+        # marks every folder that already exists when it arms as processed and
+        # runs none of them, so a folder published during an outage is dropped by
+        # the very restart that should have delivered it.
+        #
+        # Probed ONCE per drain, before the loop, not per folder: it is a
+        # subprocess, and the answer cannot meaningfully change inside one drain.
+        #
+        # Any failure publishes. See listener.py for why deferring on
+        # uncertainty would be the worse bug.
+        self.listener_said_down = False
+        if self._listener is not None:
+            try:
+                if self._listener() is False:
+                    self.listener_said_down = True
+                    return published
+            except Exception:
+                # listener.is_listening already swallows everything, but this
+                # module must not depend on its caller being careful: a probe
+                # that raises must never cost a delivery.
+                pass
 
         try:
             lock_handle = open(self.lock_path, "w")

@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -243,6 +244,119 @@ class TestLogging(CliTestCase):
             if line.strip()
         ]
         self.assertGreaterEqual(len(lines), 2)
+
+
+class TestLivenessCheck(CliTestCase):
+    """G3 end to end, through the real CLI, with a fake macrowhisper on PATH.
+
+    A fake binary rather than a patched function, because the thing under test
+    is that the shipped command shells out and reads the answer correctly. The
+    real macrowhisper is never involved and the user's daemon is never touched.
+    """
+
+    SENTINEL = "macrowhisper is not running."
+    HEALTHY = (
+        "Macrowhisper version: 2.1.1\\n"
+        "Recordings watcher: yes (armed, started 1h ago, last event never, pending 0)\\n"
+    )
+
+    def fake_macrowhisper(self, prints, exit_code=0):
+        """Put a stub `macrowhisper` first on PATH and return the env to use."""
+        bindir = Path(self._tmp.name) / "bin"
+        bindir.mkdir(exist_ok=True)
+        stub = bindir / "macrowhisper"
+        stub.write_text('#!/bin/sh\nprintf "%s"\nexit %d\n' % (prints, exit_code))
+        os.chmod(str(stub), 0o755)
+        return {"PATH": "%s:%s" % (bindir, os.environ.get("PATH", ""))}
+
+    def spooled(self):
+        spool = self.watch / ".spool"
+        return sorted(p.name for p in spool.iterdir()) if spool.exists() else []
+
+    def test_a_dead_daemon_spools_instead_of_publishing(self):
+        env = self.fake_macrowhisper(self.SENTINEL)
+        result = self.run_cli(transcript="during the outage", extra_env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.published(), [],
+                         "published into a folder the arm race will destroy")
+        self.assertEqual(len(self.spooled()), 1)
+
+    def test_it_says_so_loudly_in_the_log(self):
+        # Silent deferral would just be a quieter version of the bug.
+        env = self.fake_macrowhisper(self.SENTINEL)
+        self.run_cli(transcript="during the outage", extra_env=env)
+        log = (self.watch / "macrovoice.log").read_text(encoding="utf-8")
+        self.assertIn("macrowhisper is not running", log)
+        self.assertIn("spooled", log.lower())
+
+    def test_a_live_daemon_publishes_normally(self):
+        env = self.fake_macrowhisper(self.HEALTHY)
+        self.run_cli(transcript="delivered", extra_env=env)
+        self.assertEqual(len(self.published()), 1)
+
+    def test_a_later_run_delivers_what_the_outage_deferred(self):
+        dead = self.fake_macrowhisper(self.SENTINEL)
+        self.run_cli(transcript="waited it out", extra_env=dead)
+        self.assertEqual(self.published(), [])
+
+        alive = self.fake_macrowhisper(self.HEALTHY)
+        self.run_cli("--drain-only", extra_env=alive)
+        self.assertEqual(self.sole_meta()["result"], "waited it out")
+
+    def test_drain_only_also_refuses_to_publish_into_the_void(self):
+        # --drain-only is the recovery path, and recovery into an unwatched
+        # folder would destroy exactly the transcripts it was run to rescue.
+        dead = self.fake_macrowhisper(self.SENTINEL)
+        self.run_cli(transcript="rescue me", extra_env=dead)
+        self.assertEqual(len(self.spooled()), 1)
+
+        result = self.run_cli("--drain-only", extra_env=dead)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.published(), [], "drain-only published into the void")
+        self.assertEqual(len(self.spooled()), 1, "and it must still be recoverable")
+        log = (self.watch / "macrovoice.log").read_text(encoding="utf-8")
+        self.assertIn("macrowhisper is not running", log)
+
+    def test_the_flag_turns_the_probe_off(self):
+        env = self.fake_macrowhisper(self.SENTINEL)
+        self.run_cli("--no-liveness-check", transcript="published anyway", extra_env=env)
+        self.assertEqual(len(self.published()), 1)
+
+    def test_no_macrowhisper_on_path_publishes_rather_than_stalling(self):
+        # Fail open. A missing binary says nothing about the daemon, and
+        # deferring here would stop delivery for anyone whose PATH differs
+        # under VoiceInk's login shell.
+        bindir = Path(self._tmp.name) / "emptybin"
+        bindir.mkdir(exist_ok=True)
+        result = self.run_cli(transcript="still delivered", extra_env={"PATH": str(bindir)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.published()), 1)
+
+    def test_a_hanging_macrowhisper_does_not_cost_the_dictation(self):
+        # The B5 lesson on a new surface: a probe that blocks must not become a
+        # hang on the delivery path. VoiceInk kills the command at 10 seconds.
+        bindir = Path(self._tmp.name) / "slowbin"
+        bindir.mkdir(exist_ok=True)
+        stub = bindir / "macrowhisper"
+        stub.write_text("#!/bin/sh\nsleep 30\n")
+        os.chmod(str(stub), 0o755)
+        env = {"PATH": "%s:%s" % (bindir, os.environ.get("PATH", ""))}
+        started = time.monotonic()
+        result = self.run_cli(transcript="not lost to a hang", extra_env=env, timeout=20)
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertLess(elapsed, 10.0,
+                        "the probe must not push the run past VoiceInk's 10s kill")
+        self.assertEqual(len(self.published()), 1, "a slow probe cost the delivery")
+
+    def test_the_transcript_is_never_lost_even_when_deferred(self):
+        env = self.fake_macrowhisper(self.SENTINEL)
+        self.run_cli(transcript="precious words", extra_env=env)
+        spool = self.watch / ".spool"
+        folders = list(spool.iterdir())
+        self.assertEqual(len(folders), 1)
+        meta = json.loads((folders[0] / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["result"], "precious words")
 
 
 class TestSequentialDictations(CliTestCase):

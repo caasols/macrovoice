@@ -630,6 +630,101 @@ class TestStagingNameCollisionAcrossProcesses(unittest.TestCase):
         self.assertEqual(recovered, transcripts, "a transcript was lost before the spool")
 
 
+class TestLivenessCheck(PublisherTestCase):
+    """G3: do not publish into a watch directory nobody is watching.
+
+    macrowhisper's recordings watcher marks every folder that ALREADY EXISTS
+    when it arms as processed and drops it. So a folder published while the
+    daemon is down is not merely late, it is destroyed by the next startup, with
+    no error on either side. Deferring keeps it in `.spool/`, which the arm race
+    cannot reach because it is not inside `recordings/`.
+
+    The rule is defer only on PROOF of death. See macrovoice/listener.py.
+    """
+
+    def test_no_listener_configured_publishes_exactly_as_before(self):
+        # The default must be a no-op, so every pre-existing caller and test is
+        # unaffected by the seam existing.
+        pub = Publisher(self.watch, min_gap_s=0.05)
+        pub.publish(build_meta("unchanged"))
+        self.assertEqual(len(self.published_names()), 1)
+
+    def test_a_dead_daemon_defers_instead_of_publishing(self):
+        pub = Publisher(self.watch, min_gap_s=0.05, listener=lambda: False)
+        outcome = pub.publish(build_meta("nobody is watching"))
+        self.assertTrue(outcome.deferred)
+        self.assertEqual(self.published_names(), [],
+                         "published into a directory nothing is watching")
+
+    def test_the_transcript_survives_in_the_spool(self):
+        pub = Publisher(self.watch, min_gap_s=0.05, listener=lambda: False)
+        pub.publish(build_meta("keep me"))
+        spooled = list((self.watch / ".spool").iterdir())
+        self.assertEqual(len(spooled), 1)
+        self.assertEqual(self.read_result(spooled[0]), "keep me")
+
+    def test_a_later_run_delivers_it_once_the_daemon_is_back(self):
+        """The whole point: deferral must be recoverable, not a quieter loss."""
+        down = Publisher(self.watch, min_gap_s=0.05, listener=lambda: False)
+        down.publish(build_meta("during the outage"))
+        self.assertEqual(self.published_names(), [])
+
+        up = Publisher(self.watch, min_gap_s=0.05, listener=lambda: True)
+        up.drain()
+        published = self.published_names()
+        self.assertEqual(len(published), 1)
+        self.assertEqual(self.read_result(self.recordings / published[0]),
+                         "during the outage")
+
+    def test_a_live_daemon_publishes(self):
+        pub = Publisher(self.watch, min_gap_s=0.05, listener=lambda: True)
+        outcome = pub.publish(build_meta("someone is home"))
+        self.assertFalse(outcome.deferred)
+        self.assertEqual(len(self.published_names()), 1)
+
+    def test_an_undetermined_listener_publishes(self):
+        # None means "could not tell". Deferring on uncertainty would stop
+        # delivery on a working setup, which is worse than the bug being fixed.
+        pub = Publisher(self.watch, min_gap_s=0.05, listener=lambda: None)
+        outcome = pub.publish(build_meta("cannot tell"))
+        self.assertFalse(outcome.deferred)
+        self.assertEqual(len(self.published_names()), 1)
+
+    def test_a_listener_that_raises_publishes_rather_than_blocking_delivery(self):
+        # listener.is_listening swallows everything, but Publisher must not
+        # depend on that: a raising probe must never cost a delivery.
+        def boom():
+            raise RuntimeError("probe exploded")
+
+        pub = Publisher(self.watch, min_gap_s=0.05, listener=boom)
+        outcome = pub.publish(build_meta("still delivered"))
+        self.assertFalse(outcome.deferred)
+        self.assertEqual(len(self.published_names()), 1)
+
+    def test_the_probe_runs_once_per_drain_not_once_per_folder(self):
+        calls = []
+
+        def counting():
+            calls.append(1)
+            return True
+
+        pub = Publisher(self.watch, min_gap_s=0.0, listener=counting)
+        for i in range(3):
+            pub.stage(build_meta("queued %d" % i))
+        pub.drain()
+        self.assertEqual(len(calls), 1,
+                         "one subprocess per drain, not one per spooled folder")
+
+    def test_staging_still_happens_when_the_daemon_is_down(self):
+        # stage() runs BEFORE the probe and is unconditional. If the probe ever
+        # gated staging, an outage would lose the transcript outright, which is
+        # the opposite of the fix.
+        pub = Publisher(self.watch, min_gap_s=0.05, listener=lambda: False)
+        spooled = pub.stage(build_meta("staged regardless"))
+        self.assertTrue(spooled.exists())
+        self.assertEqual(self.read_result(spooled), "staged regardless")
+
+
 class TestSuccessorName(unittest.TestCase):
     """The pure helper that replaces spinning on the clock."""
 

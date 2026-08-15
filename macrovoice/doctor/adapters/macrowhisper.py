@@ -24,7 +24,14 @@ from typing import Optional, Tuple
 
 from .process import CommandResult, run_command
 
-NOT_RUNNING_SENTINEL = "macrowhisper is not running."
+# Imported, not restated. The delivery path needs this same sentinel for its
+# liveness check (G3) and cannot import doctor, so it lives in
+# macrovoice/listener.py and both sides share the one definition. Two copies
+# of a string that must match macrowhisper's source exactly is a drift
+# waiting to happen, and the drift would be silent: the check would simply
+# stop matching and fail open forever while looking like it worked.
+from ...listener import NOT_RUNNING_SENTINEL  # noqa: E402
+
 VERSION_KEY = "Macrowhisper version"
 
 _AGE = re.compile(r"started\s+(\d+)\s*([smhd])\s+ago")
