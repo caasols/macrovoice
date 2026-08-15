@@ -32,6 +32,7 @@ is patched and neither knows the other exists.
 - Survives the four watcher behaviours that silently drop dictations (see [How it works](#how-it-works))
 - Never loses a transcript, even when publishing fails or the process is killed at the deadline
 - Logs transcript length, not content, so the log is not a record of everything you say
+- Drives the whole pipeline from a pipe too, so actions are testable without a microphone
 - No dependencies beyond system Python 3
 
 ## Requirements
@@ -99,7 +100,13 @@ dictation and that nothing was pasted into the focused app.
 Point the Mode at `macrovoice.sh`, switch back with `macrowhisper --action autoPaste`, grant
 macrowhisper Accessibility permission, focus a text field, and dictate. Say "ask google best
 pizza" or "google best pizza" to try the voice trigger from the sample config, which ships both
-phrasings as `"triggerVoice": "ask google|google"`.
+phrasings as `"triggerVoice": "ask google|google"`. The sample also ships `ask youtube`,
+`ask perplexity` and `ask openai` (which also answers to "ask chatgpt"), each with the same
+both-phrasings treatment.
+
+A dictation that matches a voice trigger runs **that** action and nothing else: the trigger action
+replaces your default action rather than running alongside it, so "ask google ..." opens a browser
+and pastes nothing. Only a dictation that matches no trigger falls through to `autoPaste`.
 
 Voice triggers are **prefix-anchored**: macrowhisper builds `"^(?i)" + escaped pattern`
 (`Utils/TriggerEvaluator.swift:205`), so the trigger must be at the **start** of the dictation.
@@ -197,6 +204,45 @@ Exit codes: `0` healthy, `1` a fatal problem remains, `2` a fatal check could no
 | `--drain-only` | off | Publish anything left in the spool and exit |
 | `--log-transcript` | off | Log transcript text instead of just its length |
 
+## Text input, without a microphone
+
+`macrovoice` takes the transcript from `VOICEINK_TRANSCRIPT`, and falls back to **stdin** when that
+variable is absent. So the entire pipeline runs from a pipe, with no dictation and no VoiceInk:
+
+```sh
+echo "ask google best pizza in madrid" | ./macrovoice.sh
+```
+
+That publishes a real `meta.json`, and macrowhisper matches triggers and runs its action exactly as
+it would for a spoken dictation. It is the cheapest way to test an action you are writing, and it
+also makes the bridge scriptable by anything that can write to a pipe.
+
+Point it somewhere harmless while you experiment, so you are not firing actions into your real
+setup:
+
+```sh
+mkdir -p /tmp/mv-scratch
+echo "hello world" | ./macrovoice.sh --watch /tmp/mv-scratch
+cat /tmp/mv-scratch/recordings/*/meta.json
+```
+
+Pair it with macrowhisper's own dry run, which resolves the full action-selection pipeline against
+a hand-written `meta.json` and skips `moveTo`, so nothing is consumed:
+
+```sh
+macrowhisper --run-auto --meta /path/to/meta.json
+```
+
+Three things worth knowing:
+
+- **The text is passed through byte for byte**, so `echo` contributes a trailing newline. Use
+  `printf '%s' "..."` if that matters, though macrowhisper's `smartSpacing` handles stray edge
+  whitespace at insertion time anyway.
+- **Empty or whitespace-only input publishes nothing** and exits 0, logging `skipped`.
+- **The stdin read blocks by design** when `VOICEINK_TRANSCRIPT` is absent, because in that case
+  stdin genuinely is the only source of the words. If you call `macrovoice` from something that
+  opens a pipe and never closes it, pass the transcript in the environment variable instead.
+
 ## How it works
 
 macrowhisper's watcher has four behaviours a naive bridge trips over. Each is a **silent**
@@ -222,12 +268,14 @@ delivered, and a 633-character dictation arrived intact.
 
 ## Tests
 
-361 tests, 5 skipped: 175 on the delivery path, 186 for `doctor`. Total branch coverage is 99%,
-now measured across the whole package, not just the delivery path. Every delivery-path module
-(`transcript.py`, `meta.py`, `publisher.py`, `cli.py`) is at 100%, and so is most of `doctor`:
-`model.py`, `registry.py`, `runner.py`, `report.py`, and `process.py`. What is left uncovered:
-`__main__.py`'s entry-point guard, two loop branches in the bridge adapter, and four spots in the
-macrowhisper adapter, none reachable without a real daemon in the loop. CI runs the suite on
+375 tests, 8 skipped: 187 on the delivery path, 188 for `doctor`. Total branch coverage is 99%
+(99.12%), measured across the whole package with subprocess tracing. That last part matters: a
+naive run reports `cli.py` at 0%, which is wrong, because its tests drive it as a real subprocess
+that `coverage` cannot see without `COVERAGE_PROCESS_START` and a `sitecustomize.py`. Every
+delivery-path module (`transcript.py`, `meta.py`, `publisher.py`, `cli.py`) is at 100%, and so is
+most of `doctor`: `model.py`, `registry.py`, `runner.py`, `report.py`, and `process.py`. What is
+left uncovered: `__main__.py`'s entry-point guard, two loop branches in the bridge adapter, and
+five spots in the macrowhisper adapter, none reachable without a real daemon. CI runs the suite on
 macOS across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice.sh` execs
 `/usr/bin/env python3`, and on a stock Mac that is the system Python.
 
@@ -239,12 +287,13 @@ macOS across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice
 | `tests/test_meta.py` | 23 | A 31-entry escaping matrix and the `meta.json` schema contract |
 | `tests/test_transcript.py` | 22 | Env and stdin resolution, the empty-input policy, and whether stdin needs reading at all |
 | `tests/test_integration_safety.py` | 20 | The integration suite's own guard against hijacking your macrowhisper |
+| `tests/test_sample_config.py` | 9 | The shipped `macrowhisper.sample.json`: structure, and the settings that cause harm when wrong |
 | `tests/test_voiceink_invocation.py` | 8 | The `.sh` wrappers through `/bin/zsh -lc`, exactly as VoiceInk calls them |
-| `tests/test_integration_macrowhisper.py` | 5 | Opt-in; drives a **real macrowhisper daemon** |
-| `tests/test_doctor_*.py` (8 files) | 176 | `doctor`'s checks, adapters, runner, report and status parser, exercised without a real macrowhisper |
+| `tests/test_integration_macrowhisper.py` | 8 | Opt-in; drives a **real macrowhisper daemon** |
+| `tests/test_doctor_*.py` (8 files) | 188 | `doctor`'s checks, adapters, runner, report and status parser, exercised without a real macrowhisper |
 
 ```sh
-python3 -m unittest discover -s tests -t tests -v      # 361 tests, 5 skipped
+python3 -m unittest discover -s tests -t tests -v      # 375 tests, 8 skipped
 MACROVOICE_INTEGRATION=1 python3 -m unittest discover -s tests -t tests
 ```
 
@@ -272,6 +321,87 @@ are never touched, and they use a shell action rather than a paste, so no Access
 permission is needed and nothing is typed into whatever app you have focused. `macrowhisper
 --config` *persists* the path it is given, so the original is captured at import, restored
 afterwards, and asserted not to be a temp directory.
+
+## Four things that will surprise you
+
+Each of these is easy to get wrong in a way that costs you something, and none of them is obvious
+from either app's own documentation. Provenance is stated per item, because "the source says" and
+"we measured it" are not the same claim.
+
+### `moveTo: .delete` does not delete your transcript
+
+It disposes of the synthetic folder `macrovoice` created in the watch directory. That is all it
+does. **VoiceInk keeps its own copy of every dictation, and macrowhisper cannot reach it.**
+
+Read from VoiceInk's source rather than inferred: when recording stops, VoiceInk builds a
+`Transcription` record and calls `modelContext.insert` plus `save()` **before** the transcription
+pipeline runs (`VoiceInkEngine.swift:200-206`), the pipeline then writes the final text into that
+same record (`TranscriptionPipeline.swift:146`), and the record also stores `audioFileURL`
+(`:739`), so **the audio file is retained too**. The delivery routing only chooses
+`.customCommand` afterwards (`TranscriptionDelivery.swift:43-46`), which means your Mode's output
+setting has no bearing on any of it, and no bridge configuration can change that.
+
+If you are setting `moveTo: .delete` for privacy reasons, you have deleted the copy that was never
+the sensitive one. Manage retention in VoiceInk itself: its History, and its audio cleanup
+settings.
+
+### Voice triggers survive AI enhancement, but arrive reshaped
+
+If a Mode has AI enhancement on, the bridge only ever sees the **final, post-enhancement** text.
+Anything the model does to your opening words has already happened.
+
+Measured 2026-08-15 with OpenAI `gpt-5.5` and VoiceInk's Default prompt. Dictating
+"ask google best pizza in madrid" arrived as:
+
+```
+Ask Google: “Best pizza place in Madrid.”
+```
+
+The trigger still fired, and the detail is the useful part. The sample ships
+`"triggerVoice": "ask google|google"`, and each `|` alternative is anchored independently. Here
+`ask google` matched and the bare `google` did **not**, because the text no longer begins with it.
+In plain dictations without AI enhancement, which arrive as "Google, what is...", the reverse is
+true. **Each alternative was the only one that matched in one of the two cases, so list both.**
+
+The second effect has no workaround: the model added a colon and **curly quotes** (U+201C and
+U+201D, not ASCII), macrowhisper strips the matched trigger but not the punctuation around it, and
+the residue lands in your action's payload. The search above ran for `Best pizza place in Madrid."`
+including the stray quote. Harmless for a web search; it matters for any action that parses,
+compares or greps the text, and it compounds the NFD note below, since these quotes are non-ASCII
+too.
+
+Treat this as one measurement, not a law: one model, one prompt, two dictations. A different model
+or a prompt that rewrites more aggressively could still drop the trigger word entirely.
+
+### `{{xml:tag}}` extracts the tag but leaves the markup in `{{swResult}}`
+
+Use `{{xml:note}}` in an action and the tag's content is extracted correctly. But `{{swResult}}` in
+that same action still carries the raw `<note>...</note>` markup.
+
+This is specific to the bridge and cannot happen upstream. `processAllPlaceholders`
+(`Placeholders.swift:1759-1780`) branches on which field holds the text: when `llmResult` is
+present it writes the cleaned text back (`updatedMetaJson["llmResult"] = cleaned`), but when only
+`result` is present it discards the cleaned copy (`let (_, tags) = ...`) and never updates
+`result`. The bridge deliberately never sets `llmResult`, because doing so flips macrowhisper's
+validation gate to require a non-empty `llmResult` that VoiceInk cannot supply, so the second
+branch is the only one we ever take. Verified in the source and confirmed against a live daemon in
+`tests/test_integration_macrowhisper.py`.
+
+### macrowhisper rewrites your config file
+
+`defaults.autoUpdateConfig` defaults to **true**, and on every startup macrowhisper reloads the
+config, normalises it, and writes it back (`main.swift:1871-1876` calling `updateConfiguration()`,
+which ends in `saveConfig()`). So the file will stop matching whatever you copied in: expect added
+keys, a `$schema` and `configVersion` entry, and different formatting.
+
+Measured on a real install: a config copied from `macrowhisper.sample.json` with 8 keys under
+`defaults` had 28 a few days later, plus `$schema`, `configVersion`, `scriptsAS` and `shortcuts`,
+and a `macrowhisper.json.backup.pre-v2` file sitting beside it from the version migration.
+
+Nothing is lost, and a pre-migration backup is written, but do not be surprised when the file no
+longer matches the sample, and do not keep your config under version control expecting it to stay
+put. Set `defaults.autoUpdateConfig: false` to opt out, at the cost of an "Outdated Config"
+notification if your file is ever behind.
 
 ## Limitations
 
@@ -333,6 +463,9 @@ being broken.
 | Config edits appear to do nothing | Use `macrowhisper --action`, not a file edit while the daemon runs |
 | Quotes look backslashed in `fired.log` | Expected. macrowhisper shell-escapes `{{swResult}}` for shell actions. Insert actions are not escaped |
 | Transcript missing entirely | Check `~/mw-bridge/macrovoice.log` and `~/mw-bridge/.spool/`, or force it with `--drain-only` |
+| A voice trigger fired but nothing pasted | Expected. A matched trigger runs instead of your default action, not alongside it |
+| My config file changed on its own | `autoUpdateConfig`, which defaults to true. See [Four things that will surprise you](#four-things-that-will-surprise-you) |
+| Stray quotes or punctuation in a triggered search | AI enhancement reshaped the dictation before the bridge saw it. Same section |
 
 `macrowhisper --status`'s **exit code** is useless as a liveness check: it exits 0 either way.
 Its **output** is not: it prints the literal line `macrowhisper is not running.` when nothing is

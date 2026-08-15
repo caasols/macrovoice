@@ -127,7 +127,19 @@ class SampleConfigTest(unittest.TestCase):
         '|' alternative is anchored independently, so a bare 'youtube' never
         matches the natural 'ask youtube best pizza'. Every triggered url action
         we ship must carry both forms, or it silently does nothing for the
-        phrasing people actually use."""
+        phrasing people actually use.
+
+        Measured 2026-08-15, which turned this from prudence into a requirement.
+        The two forms rescue DIFFERENT real cases:
+
+          plain dictation    -> 'Google, what is the best pizza place in Madrid?'
+                                bare 'google' matches; 'ask google' does NOT
+          AI enhancement on  -> 'Ask Google: "Best pizza place in Madrid."'
+                                'ask google' matches; bare 'google' does NOT
+
+        (gpt-5.5, VoiceInk's Default prompt.) Drop either alternative and one of
+        those two everyday cases falls through to the default action silently.
+        """
         for name, action in (self.config.get("urls") or {}).items():
             trigger = action.get("triggerVoice")
             if not trigger:
