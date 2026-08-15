@@ -558,6 +558,58 @@ class TestAccessibility(unittest.TestCase):
         self.assertIs(registry._check_accessibility(ctx).outcome, Outcome.OK)
 
 
+class TestTheCatalogueMatchesWhatWePublish(unittest.TestCase):
+    """The README states a check count, and a stated number drifts.
+
+    It did, immediately: stage 2 was planned as five vi.* checks, shipped as six
+    after a live run split one of them, and the README went out saying
+    "Twenty-five" because the arithmetic was done against the plan rather than
+    against the table. Caught by running doctor, not by review.
+
+    So the number is asserted against `CHECKS` rather than remembered. Update the
+    README when this fails; do not update this test to match the README.
+    """
+
+    def test_the_readme_names_the_real_number_of_checks(self):
+        words = {
+            20: "Twenty", 21: "Twenty-one", 22: "Twenty-two", 23: "Twenty-three",
+            24: "Twenty-four", 25: "Twenty-five", 26: "Twenty-six",
+            27: "Twenty-seven", 28: "Twenty-eight", 29: "Twenty-nine", 30: "Thirty",
+        }
+        count = len(registry.CHECKS)
+        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        expected = "%s checks across both apps" % words.get(count, str(count))
+        self.assertIn(
+            expected, readme,
+            "doctor has %d checks but the README does not say so. Expected the "
+            "phrase %r." % (count, expected),
+        )
+
+    def test_every_check_id_is_unique(self):
+        ids = [c.id for c in registry.CHECKS]
+        self.assertEqual(len(ids), len(set(ids)), "duplicate check id")
+
+    def test_every_dependency_names_a_check_that_exists(self):
+        # runner turns a blocked dependency into UNKNOWN. A dependency on an id
+        # that does not exist would block a check forever, silently.
+        ids = {c.id for c in registry.CHECKS}
+        for check in registry.CHECKS:
+            for dep in check.depends_on:
+                self.assertIn(dep, ids, "%s depends on unknown %s" % (check.id, dep))
+
+    def test_every_check_id_falls_into_a_rendered_group(self):
+        # report.py groups by id prefix; anything else lands in "Other", which is
+        # a silent way for a new check to look like a mistake.
+        from macrovoice.doctor.report import GROUPS
+
+        prefixes = tuple(prefix for prefix, _ in GROUPS)
+        for check in registry.CHECKS:
+            self.assertTrue(
+                check.id.startswith(prefixes),
+                "%s has no group in report.GROUPS" % check.id,
+            )
+
+
 class TestVoiceInkChecks(unittest.TestCase):
     """Stage 2, the read-only VoiceInk half.
 

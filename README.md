@@ -183,7 +183,7 @@ paste bug in one app rather than a global setting doing collateral damage.
 ./macrovoice.sh doctor --check
 ```
 
-Twenty-five checks across both apps, reported in the order you hit them. It is read-only: it never
+Twenty-six checks across both apps, reported in the order you hit them. It is read-only: it never
 creates a directory, edits a config, or writes to VoiceInk.
 
 Six of them inspect the VoiceInk half, which is where the traps that look most like "the bridge
