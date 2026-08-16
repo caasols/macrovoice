@@ -534,6 +534,8 @@ being broken.
 | Nothing happens at all | Is your Mode default or shortcut-bound? See [Picking the Mode](#picking-the-mode-the-trap-everyone-hits) |
 | Text pastes normally, your command never runs | The same thing. The Mode is inert |
 | The bridge publishes but nothing fires | Does macrowhisper's **saved** config match? `macrowhisper --get-config`, then check its `watch` |
+| `doctor` warns about the watch directory name | You are on the old `~/mw-bridge`. Harmless. See [Upgrading](#upgrading-from-mw-bridge) |
+| Both `~/mw-bridge` and `~/macrovoice` exist | A half-finished migration. macrovoice uses `~/macrovoice`; make sure macrowhisper does too |
 | Some dictations do nothing | Check macrowhisper's log for `burst protection` or `older than existing`, then raise `--gap` |
 | Text appears but no paste | macrowhisper needs Accessibility permission, and the daemon must be restarted after you grant it |
 | A dictation closed my draft | `simEsc`. See the section above |
