@@ -341,7 +341,7 @@ delivered, and a 633-character dictation arrived intact.
 
 ## Tests
 
-532 tests, 11 skipped: 271 on the delivery path, 261 for `doctor`. Every number in this section is
+535 tests, 11 skipped: 274 on the delivery path, 261 for `doctor`. Every number in this section is
 derived from `unittest` discovery by `tests/test_readme.py`, because all of them had drifted at
 least once, one of them by 89. Total branch coverage is 99%
 (99.36%), measured across the whole package with subprocess tracing. That last part matters: a
@@ -363,7 +363,7 @@ macOS across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice
 | `tests/test_harness_port.py` | 24 | That the oracle still matches macrowhisper's validation gate, branch for branch |
 | `tests/test_meta.py` | 23 | A 31-entry escaping matrix and the `meta.json` schema contract |
 | `tests/test_transcript.py` | 22 | Env and stdin resolution, the empty-input policy, and whether stdin needs reading at all |
-| `tests/test_watch.py` | 20 | Watch-root resolution against a real temporary home, including that an unmigrated `~/mw-bridge` keeps working |
+| `tests/test_watch.py` | 23 | Watch-root resolution against a real temporary home, including that an unmigrated `~/mw-bridge` keeps working, plus the two `.gitignore` traps: never ignore the package directory, never ignore `.claude/` wholesale |
 | `tests/test_voiceink_invocation.py` | 15 | The `.sh` wrappers through `/bin/zsh -lc`, exactly as VoiceInk calls them, and that `probe.sh` resolves the watch root the same way Python does |
 | `tests/test_listener.py` | 14 | The liveness probe, including that it only defers on macrowhisper's own "not running" sentence |
 | `tests/test_integration_macrowhisper.py` | 11 | Opt-in; drives a **real macrowhisper daemon**. These 11 are the whole of what a default run skips |
@@ -371,7 +371,7 @@ macOS across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice
 | `tests/test_readme.py` | 6 | That the counts in this section, and the heading above, still match the suite |
 
 ```sh
-python3 -m unittest discover -s tests -t tests -v      # 532 tests, 11 skipped
+python3 -m unittest discover -s tests -t tests -v      # 535 tests, 11 skipped
 MACROVOICE_INTEGRATION=1 python3 -m unittest discover -s tests -t tests
 ```
 

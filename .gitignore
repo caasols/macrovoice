@@ -62,6 +62,22 @@ graphify-out/
 # have been, so the protection rested on a file this repo does not control.
 .superpowers/
 
+# Claude Code's local working state, and ONLY the parts that are local by definition.
+# Added 2026-08-17 after `git status` showed `.claude/worktrees/<branch>/`, an entire
+# nested checkout, as untracked and matched by no rule: `git add -A` would have swept it
+# in. On this repo that is easy to miss, because `git status` showing nothing where you
+# expected something is the normal sight here, which is the same blind spot as the B4
+# near-miss recorded in context.md.
+#
+# Deliberately NOT `.claude/` wholesale. A blanket rule would silently hide a shared
+# `settings.json`, a project skill or an agent definition from `git add` on a repo where
+# git status is not a reliable alarm, which is exactly the mistake `/macrovoice/` is
+# commented against above. These two entries are machine-local by definition: a worktree
+# is a checkout path, and `.local` is the convention for per-machine settings. Anything
+# else under .claude/ stays visible so the choice to publish it remains a choice.
+.claude/worktrees/
+.claude/settings.local.json
+
 # Markdown is private by default.
 #
 # Notes, working docs and captured output live in this folder next to the code.

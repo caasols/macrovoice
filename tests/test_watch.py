@@ -218,5 +218,69 @@ class TestTheGitignoreDoesNotSwallowThePackage(unittest.TestCase):
         )
 
 
+class TestTheGitignoreCoversAgentWorktrees(unittest.TestCase):
+    """The other half of the same blind spot, found 2026-08-17.
+
+    `.claude/worktrees/<branch>/` is an entire nested checkout of this repo,
+    created by the agent harness inside the working tree. It was matched by no
+    ignore rule, so `git add -A` from the main checkout would have swept it in.
+    Nobody noticed for the same reason the package trap above is a test: on this
+    repo `git status` showing nothing is normal, so an untracked directory
+    sitting in it does not read as an alarm.
+
+    The complement matters as much as the rule: the fix is deliberately NOT a
+    blanket `.claude/`, because that would hide a shared settings.json or a
+    project skill from `git add` and reintroduce the very trap above, one
+    directory over. Both halves are asserted here so a later "simplification" to
+    `.claude/` fails loudly.
+    """
+
+    REPO = Path(__file__).resolve().parent.parent
+
+    def rules(self):
+        text = (self.REPO / ".gitignore").read_text(encoding="utf-8")
+        return [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+
+    def ignored(self, relpath):
+        import subprocess
+
+        result = subprocess.run(
+            ["git", "check-ignore", "-q", relpath],
+            cwd=str(self.REPO), capture_output=True,
+        )
+        return result.returncode == 0  # 0 means git IS ignoring it
+
+    def test_a_worktree_checkout_is_ignored(self):
+        self.assertTrue(
+            self.ignored(".claude/worktrees/some-branch/macrovoice/cli.py"),
+            "a nested worktree checkout is visible to `git add -A`",
+        )
+
+    def test_local_settings_are_ignored(self):
+        self.assertTrue(
+            self.ignored(".claude/settings.local.json"),
+            "per-machine Claude settings are visible to `git add -A`",
+        )
+
+    def test_claude_is_not_ignored_wholesale(self):
+        # The complement. A blanket rule would silently swallow anything the repo
+        # might legitimately want to publish under .claude/, on a repo where
+        # `git status` is not a reliable alarm. Same shape as the package trap.
+        for rule in self.rules():
+            self.assertNotIn(
+                rule.strip("!").rstrip("/"),
+                (".claude", "/.claude"),
+                "%r ignores all of .claude/, hiding shareable project config" % rule,
+            )
+        self.assertFalse(
+            self.ignored(".claude/settings.json"),
+            "a shared .claude/settings.json would be invisible to `git add`",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
