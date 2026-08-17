@@ -156,5 +156,112 @@ class SampleConfigTest(unittest.TestCase):
             )
 
 
+def placeholder_quoting(command):
+    """Every ``{{placeholder}}`` in a command string, with the quote enclosing it.
+
+    Returns a list of ``(placeholder, quote)`` where quote is ``'"'``, ``"'"`` or
+    ``None`` for unquoted. A tiny scanner rather than a regex, because the answer
+    depends on the quote state accumulated to the left of the placeholder, which
+    is exactly what a regex cannot carry.
+    """
+    found = []
+    state = None
+    i = 0
+    while i < len(command):
+        char = command[i]
+        if command.startswith("{{", i):
+            end = command.find("}}", i)
+            found.append((command[i : end + 2] if end != -1 else command[i:], state))
+            i = len(command) if end == -1 else end + 2
+            continue
+        if state != "'" and char == "\\":  # escapes, except inside single quotes
+            i += 2
+            continue
+        if state is None and char in ("'", '"'):
+            state = char
+        elif state == char:
+            state = None
+        i += 1
+    return found
+
+
+class ShellQuotingTest(unittest.TestCase):
+    """Placeholders in shell and AppleScript actions MUST sit in double quotes.
+
+    macrowhisper escapes a placeholder for the action type it is in, and for
+    shell that is escapeShellCharacters (ShellUtils.swift:4-11), which backslashes
+    exactly four characters: backslash, double quote, backtick and dollar. It does
+    NOT escape the single quote, because the escaping is written for a
+    DOUBLE-quoted context. Upstream's own samples all use double quotes.
+
+    Put the placeholder in single quotes instead and a dictation containing an
+    apostrophe, which is most English dictation, ends the quoted string early.
+    Measured 2026-08-17 by replaying that escaping against /bin/sh:
+
+        don't forget                       -> rc=2, action never runs, dictation lost
+        don't stop; touch X; it's fine     -> the touch EXECUTED
+        don't stop, it's fine              -> logged as 3 lines, apostrophes gone
+
+    and every escaped character leaks a literal backslash into the output, which
+    is why quotes used to look backslashed in fired.log. In double quotes all of
+    those pass through byte-faithfully and nothing executes.
+
+    Unquoted is not acceptable either: the shell would word-split and glob it.
+
+    AppleScript is the same shape one step removed (escapeAppleScriptString
+    escapes backslash and double quote only), so it carries the same requirement.
+    """
+
+    QUOTED_CATEGORIES = ("scriptsShell", "scriptsAS")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.config = json.loads(SAMPLE_PATH.read_text(encoding="utf-8"))
+
+    def test_every_placeholder_in_a_script_action_is_double_quoted(self):
+        checked = 0
+        for category in self.QUOTED_CATEGORIES:
+            for name, action in (self.config.get(category) or {}).items():
+                command = action.get("action") or ""
+                for placeholder, quote in placeholder_quoting(command):
+                    checked += 1
+                    self.assertEqual(
+                        quote,
+                        '"',
+                        "%s.%s puts %s in %s. Placeholders in script actions must be "
+                        "double-quoted: macrowhisper's escaping does not escape the "
+                        "single quote, so an apostrophe in a dictation breaks out of "
+                        "the string and can execute the rest of it.\n  action: %s"
+                        % (
+                            category,
+                            name,
+                            placeholder,
+                            "single quotes" if quote == "'" else "no quotes",
+                            command,
+                        ),
+                    )
+        self.assertGreater(
+            checked, 0, "no script placeholders found; this test is asserting nothing"
+        )
+
+    def test_the_scanner_reads_quote_state_the_way_a_shell_does(self):
+        """The assertion above is only as good as the scanner under it."""
+        cases = [
+            ("""printf '%s' '{{a}}'""", "'"),
+            ('''printf "%s" "{{a}}"''', '"'),
+            ("""echo {{a}}""", None),
+            # A double quote inside single quotes does not open anything.
+            ("""echo '"' '{{a}}'""", "'"),
+            # ...and a single quote inside double quotes does not either.
+            ('''echo "it's" "{{a}}"''', '"'),
+            # An escaped double quote outside quotes must not open a string.
+            ('''echo \\" "{{a}}"''', '"'),
+        ]
+        for command, expected in cases:
+            found = placeholder_quoting(command)
+            self.assertEqual(len(found), 1, command)
+            self.assertEqual(found[0][1], expected, command)
+
+
 if __name__ == "__main__":
     unittest.main()

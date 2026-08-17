@@ -97,10 +97,15 @@
         "Headless debugging action. Set defaults.activeAction to 'markerLog'",
         "instead of 'autoPaste' to verify the bridge without needing a focused",
         "text field or Accessibility permissions. This is how Gate 1 was proven.",
-        "Note that shell actions get shell-safe escaping applied to {{swResult}},",
-        "so quotes appear backslashed in the log. Insert actions are not escaped."
+        "{{swResult}} is in DOUBLE quotes and must stay that way in any shell or",
+        "AppleScript action you write. macrowhisper escapes a shell placeholder",
+        "with escapeShellCharacters, which covers backslash, double quote,",
+        "backtick and dollar, but NOT the single quote, because it assumes a",
+        "double-quoted context. In single quotes an ordinary apostrophe ends the",
+        "string early: the dictation is lost, or the rest of your words are run",
+        "as shell commands. This file shipped single quotes until 2026-08-17."
       ],
-      "action": "printf '%s fired: %s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" '{{swResult}}' >> ~/macrovoice/fired.log",
+      "action": "printf '%s fired: %s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \"{{swResult}}\" >> ~/macrovoice/fired.log",
       "scriptAsync": true
     }
   }

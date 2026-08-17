@@ -397,7 +397,7 @@ permission is needed and nothing is typed into whatever app you have focused. `m
 --config` *persists* the path it is given, so the original is captured at import, restored
 afterwards, and asserted not to be a temp directory.
 
-## Four things that will surprise you
+## Five things that will surprise you
 
 Each of these is easy to get wrong in a way that costs you something, and none of them is obvious
 from either app's own documentation. Provenance is stated per item, because "the source says" and
@@ -461,6 +461,36 @@ present it writes the cleaned text back (`updatedMetaJson["llmResult"] = cleaned
 validation gate to require a non-empty `llmResult` that VoiceInk cannot supply, so the second
 branch is the only one we ever take. Verified in the source and confirmed against a live daemon in
 `tests/test_integration_macrowhisper.py`.
+
+### Quoting a placeholder in a shell action
+
+**Use double quotes. `"{{swResult}}"`, never `'{{swResult}}'`.** Measured 2026-08-17 against a
+real daemon, after this repo shipped the wrong one until that date.
+
+macrowhisper escapes a placeholder for the action type it lands in. For shell that is
+`escapeShellCharacters` (`ShellUtils.swift:4-11`), which backslashes exactly four characters:
+backslash, double quote, backtick and dollar. The single quote is not among them, because the
+escaping is written for a double-quoted context, which is what upstream's own examples use.
+
+Put the placeholder in single quotes and an apostrophe in your dictation ends the string early.
+What follows is then read as shell syntax. Three outcomes, none of which announces itself:
+
+| You dictate | With `'{{swResult}}'` | With `"{{swResult}}"` |
+|---|---|---|
+| `don't forget the milk` | the action aborts, and that dictation is gone | logged verbatim |
+| `don't stop, it's fine` | logged as three lines with the apostrophes stripped | logged verbatim |
+| anything with an apostrophe and a `;` | **the words after the `;` run as a command** | logged verbatim |
+| `she said "hi"`, `` `date` ``, `$HOME`, `a\b` | arrives with stray backslashes | arrives byte-faithful |
+
+The last row is why quotes used to look backslashed in `fired.log`. That was never inherent; it
+was the wrong quote.
+
+Unquoted is not a third option: the shell would split your dictation on spaces and expand any `*`
+in it. The same rule applies to AppleScript actions, whose escaping (`escapeAppleScriptString`)
+covers only backslash and double quote.
+
+`tests/test_sample_config.py` enforces this on the shipped sample, and
+`ApostropheInShellActionTest` proves it end to end against a real daemon.
 
 ### macrowhisper rewrites your config file
 
@@ -540,10 +570,10 @@ being broken.
 | Text appears but no paste | macrowhisper needs Accessibility permission, and the daemon must be restarted after you grant it |
 | A dictation closed my draft | `simEsc`. See the section above |
 | Config edits appear to do nothing | Use `macrowhisper --action`, not a file edit while the daemon runs |
-| Quotes look backslashed in `fired.log` | Expected. macrowhisper shell-escapes `{{swResult}}` for shell actions. Insert actions are not escaped |
+| Quotes look backslashed in `fired.log`, or an apostrophe loses the dictation | Your shell action wraps `{{swResult}}` in **single** quotes. Use double quotes. See [Quoting a placeholder in a shell action](#quoting-a-placeholder-in-a-shell-action) |
 | Transcript missing entirely | Check `~/macrovoice/macrovoice.log` and `~/macrovoice/.spool/`, or force it with `--drain-only` |
 | A voice trigger fired but nothing pasted | Expected. A matched trigger runs instead of your default action, not alongside it |
-| My config file changed on its own | `autoUpdateConfig`, which defaults to true. See [Four things that will surprise you](#four-things-that-will-surprise-you) |
+| My config file changed on its own | `autoUpdateConfig`, which defaults to true. See [Five things that will surprise you](#five-things-that-will-surprise-you) |
 | Stray quotes or punctuation in a triggered search | AI enhancement reshaped the dictation before the bridge saw it. Same section |
 
 `macrowhisper --status`'s **exit code** is useless as a liveness check: it exits 0 either way.

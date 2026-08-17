@@ -316,11 +316,21 @@ class RealMacrowhisperTestCase(unittest.TestCase):
                 "actionDelay": 0.05,
                 "history": 0,
                 "muteNotifications": True,
+                # macrowhisper defaults simEsc to TRUE and posts a real Escape
+                # into the FOCUSED app before acting (Accessibility.swift:477-494).
+                # Without this line every integration run pressed Escape into
+                # whatever the developer had open, which is the documented
+                # data-loss trap this project exists to warn people about. Found
+                # 2026-08-17 in the daemon's own log:
+                #   [ClipboardMonitor] ESC key pressed for non-insert action
+                "simEsc": False,
             },
             "scriptsShell": {
                 "markerLog": {
+                    # DOUBLE quotes, and it must stay that way. See
+                    # ApostropheInShellActionTest for what single quotes cost.
                     "action": (
-                        "printf '%s\\n' '{{swResult}}' >> " + str(self.fired_log)
+                        'printf "%s\\n" "{{swResult}}" >> ' + str(self.fired_log)
                     ),
                     "scriptAsync": False,
                 }
@@ -504,7 +514,10 @@ class Gate3MacrovoiceDrivesMacrowhisperTest(RealMacrowhisperTestCase):
         # The escaping matrix is unit-tested; this proves it survives the real
         # JSON write, the real watcher and macrowhisper's own placeholder
         # substitution, which is where a naive shell implementation would break.
-        transcript = 'quotes " backslash \\ accent café emoji 🎙 done'
+        # The apostrophe and the dollar were added 2026-08-17. Their absence is
+        # exactly why this test passed for nine days while the channel it
+        # measures through was corrupting text and could execute it.
+        transcript = "quotes \" apostrophe don't backslash \\ dollar $HOME accent café emoji 🎙 done"
         result = self.run_macrovoice(transcript)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -512,13 +525,17 @@ class Gate3MacrovoiceDrivesMacrowhisperTest(RealMacrowhisperTestCase):
         self.assertEqual(len(lines), 1, f"expected one fire, got {lines}")
         got = lines[0]
 
-        # Shell-type actions get shell-safe escaping applied by macrowhisper
-        # (Placeholders.swift), so the quote arrives backslashed. Assert on the
-        # parts that must survive verbatim rather than on the whole string.
-        self.assertIn("🎙", got)
-        self.assertIn("backslash", got)
-        # Accented text needs normalising first; see the dedicated test below.
-        self.assertIn("café", unicodedata.normalize("NFC", got))
+        # Byte for byte, once accents are normalised. This used to assert only on
+        # substrings, with a comment explaining the stray backslashes as
+        # macrowhisper's escaping. They were ours: the action single-quoted the
+        # placeholder. With double quotes there is nothing left to excuse, so the
+        # test asserts the whole string.
+        self.assertEqual(
+            unicodedata.normalize("NFC", got),
+            unicodedata.normalize("NFC", transcript),
+            "the round trip must be byte-faithful. A stray backslash here means a "
+            "shell action somewhere is quoting {{swResult}} with single quotes.",
+        )
 
     def test_macrowhisper_returns_accented_text_as_nfd(self):
         """Measured behaviour, not a preference: the far end denormalises.
@@ -672,7 +689,7 @@ class XmlPlaceholderFallbackTest(RealMacrowhisperTestCase):
         # when the action requests a tag (processXmlPlaceholders returns early
         # on an empty requestedTags), so {{swResult}} alone would prove nothing.
         config["scriptsShell"]["markerLog"]["action"] = (
-            "printf 'TAG=%s|SW=%s\\n' '{{xml:note}}' '{{swResult}}' >> "
+            'printf "TAG=%s|SW=%s\\n" "{{xml:note}}" "{{swResult}}" >> '
             + str(self.fired_log)
         )
         return config
@@ -702,6 +719,62 @@ class XmlPlaceholderFallbackTest(RealMacrowhisperTestCase):
         self.assertIn(self.TAG_TEXT, sw_part, "got: %r" % line)
 
 
+class ApostropheInShellActionTest(RealMacrowhisperTestCase):
+    """Spoken words must never become shell syntax.
+
+    macrowhisper escapes a placeholder for its action type, and for shell that is
+    escapeShellCharacters (ShellUtils.swift:4-11): backslash, double quote,
+    backtick and dollar, and nothing else. The single quote is deliberately absent
+    because the escaping assumes a DOUBLE-quoted context, which is what upstream's
+    own samples use.
+
+    This repo shipped single quotes anyway, in macrowhisper.sample.json and in the
+    base config of this very harness, from 2026-08-08 until 2026-08-17. Two
+    apostrophes and a semicolon in one dictation therefore ran a command. The
+    everyday version is worse for being quiet: one apostrophe aborts the action and
+    the dictation is lost, and two without a semicolon strip the apostrophes and
+    split the text across lines.
+
+    Nothing in 523 tests caught it because no transcript contained an apostrophe.
+    test_unicode_survives_the_round_trip carried a double quote, a backslash, an
+    accent and an emoji, and its comment explained the resulting stray backslashes
+    as macrowhisper's escaping rather than as our quoting bug, then asserted only
+    on the substrings that survived it. This test exists so the channel itself is
+    under test, not just what happens to get through it.
+    """
+
+    def test_a_dictation_of_shell_syntax_is_logged_verbatim_and_runs_nothing(self):
+        # Both forms, because they fail for different reasons: a bare `touch`
+        # needs PATH, which macrowhisper inherits (getUTF8Environment copies
+        # ProcessInfo.environment), and an absolute one needs nothing at all.
+        # Measured 2026-08-17 against single quotes: BOTH ran.
+        relative = self.watch / "RAN_VIA_PATH"
+        absolute = self.watch / "RAN_VIA_ABSOLUTE_PATH"
+        transcript = "don't stop; touch %s; /usr/bin/touch %s; it's fine" % (
+            relative,
+            absolute,
+        )
+
+        result = self.run_macrovoice(transcript)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        lines = self.wait_for_fires(1)
+        executed = [p.name for p in (relative, absolute) if p.exists()]
+        self.assertEqual(
+            executed,
+            [],
+            "COMMAND EXECUTION from dictated text: %s. The placeholder is not in "
+            "double quotes, so the apostrophes closed the string and the rest was "
+            "parsed as shell syntax." % ", ".join(executed),
+        )
+        self.assertEqual(
+            lines,
+            [transcript],
+            "the dictation must land in the log byte for byte, apostrophes and "
+            "semicolons included.",
+        )
+
+
 class PresetSearchTriggerTest(RealMacrowhisperTestCase):
     """N3: the preset searches we ship must actually route to their own action.
 
@@ -728,8 +801,8 @@ class PresetSearchTriggerTest(RealMacrowhisperTestCase):
         for name, action in self.SAMPLE_URLS.items():
             config["scriptsShell"][name] = {
                 "action": (
-                    "printf 'ROUTED=" + name + "|TEXT=%s\\n' "
-                    "'{{swResult}}' >> " + str(self.fired_log)
+                    'printf "ROUTED=' + name + '|TEXT=%s\\n" '
+                    '"{{swResult}}" >> ' + str(self.fired_log)
                 ),
                 "triggerVoice": action["triggerVoice"],
                 "scriptAsync": False,
