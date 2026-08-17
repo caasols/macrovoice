@@ -341,7 +341,9 @@ delivered, and a 633-character dictation arrived intact.
 
 ## Tests
 
-434 tests, 8 skipped: 193 on the delivery path, 241 for `doctor`. Total branch coverage is 99%
+532 tests, 11 skipped: 271 on the delivery path, 261 for `doctor`. Every number in this section is
+derived from `unittest` discovery by `tests/test_readme.py`, because all of them had drifted at
+least once, one of them by 89. Total branch coverage is 99%
 (99.36%), measured across the whole package with subprocess tracing. That last part matters: a
 naive run reports `cli.py` at 0%, which is wrong, because its tests drive it as a real subprocess
 that `coverage` cannot see without `COVERAGE_PROCESS_START` and a `sitecustomize.py`. Every
@@ -364,11 +366,12 @@ macOS across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice
 | `tests/test_watch.py` | 20 | Watch-root resolution against a real temporary home, including that an unmigrated `~/mw-bridge` keeps working |
 | `tests/test_voiceink_invocation.py` | 15 | The `.sh` wrappers through `/bin/zsh -lc`, exactly as VoiceInk calls them, and that `probe.sh` resolves the watch root the same way Python does |
 | `tests/test_listener.py` | 14 | The liveness probe, including that it only defers on macrowhisper's own "not running" sentence |
-| `tests/test_integration_macrowhisper.py` | 10 | Opt-in; drives a **real macrowhisper daemon** |
-| `tests/test_sample_config.py` | 9 | The shipped `macrowhisper.sample.json`: structure, and the settings that cause harm when wrong |
+| `tests/test_integration_macrowhisper.py` | 11 | Opt-in; drives a **real macrowhisper daemon**. These 11 are the whole of what a default run skips |
+| `tests/test_sample_config.py` | 11 | The shipped `macrowhisper.sample.json`: structure, the settings that cause harm when wrong, and that no script action single-quotes a placeholder |
+| `tests/test_readme.py` | 6 | That the counts in this section, and the heading above, still match the suite |
 
 ```sh
-python3 -m unittest discover -s tests -t tests -v      # 523 tests, 10 skipped
+python3 -m unittest discover -s tests -t tests -v      # 532 tests, 11 skipped
 MACROVOICE_INTEGRATION=1 python3 -m unittest discover -s tests -t tests
 ```
 
